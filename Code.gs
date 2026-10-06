@@ -23,7 +23,13 @@ function doGet(e) {
 
 function doPost(e) {
   try {
-    const body = JSON.parse((e && e.postData && e.postData.contents) || '{}');
+    const request = JSON.parse((e && e.postData && e.postData.contents) || '{}');
+    const secret = PropertiesService.getScriptProperties().getProperty('JIRA_CLIENT_SECRET');
+    if (!request.payload || !secret) throw new Error('Unauthorized');
+    const signature = Utilities.computeHmacSha256Signature(request.payload, secret)
+      .map(byte => ('0' + ((byte + 256) % 256).toString(16)).slice(-2)).join('');
+    if (request.signature !== signature) throw new Error('Unauthorized');
+    const body = JSON.parse(request.payload);
     if (body.action === 'vote') return json_(recordVote_(body));
     if (body.action === 'saveConfig') return json_(saveConfig_(body));
     return json_({ ok: false, error: 'Unknown action' });
@@ -33,6 +39,12 @@ function doPost(e) {
 }
 
 function recordVote_(body) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try { return recordVoteLocked_(body); } finally { lock.releaseLock(); }
+}
+
+function recordVoteLocked_(body) {
   const voterId = String(body.voterId || '').trim();
   const candidateId = String(body.candidateId || '').trim();
   if (!voterId || !candidateId) throw new Error('voterId and candidateId are required');
