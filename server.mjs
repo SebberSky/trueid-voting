@@ -27,6 +27,14 @@ async function sheetRead(action) {
   if (!response.ok) throw Error('Google Sheet ไม่ตอบกลับ ('+response.status+')');
   return response.json();
 }
+async function sheetWrite(body,env) {
+  const payload=JSON.stringify(body);
+  const response=await fetch(SHEET,{method:'POST',headers:{'Content-Type':'application/json; charset=utf-8'},body:JSON.stringify({payload,signature:await hmac(payload,env.JIRA_CLIENT_SECRET)})});
+  if(!response.ok)throw Error('Google Sheet ไม่ตอบกลับ');
+  const result=await response.json();
+  if(result.ok===false)throw Error(result.error||'บันทึกข้อมูลไม่สำเร็จ');
+  return result;
+}
 export default {
   async fetch(req, env) {
     const url = new URL(req.url);
@@ -49,13 +57,18 @@ export default {
         if (!profileResponse.ok || !profile.account_id) return authError('อ่านข้อมูลบัญชี Jira ไม่สำเร็จ ('+profileResponse.status+')');
         const email = String(profile.email || '').toLowerCase();
         const user = {id:profile.account_id,email,name:profile.name || email,admin:ADMINS.includes(email),exp:Date.now()+8*3600000};
+        await sheetWrite({action:'registerClient',accountId:user.id,name:user.name},env);
         return redirect('/#vote',[cookie('tv_session',await sign(user,env),8*3600),cookie('tv_oauth_state','',0)]);
       }
       if (url.pathname === '/auth/logout' && req.method === 'POST') {
         if (req.headers.get('Origin') !== ORIGIN) return json({error:'Forbidden'},403);
         return redirect('/',[cookie('tv_session','',0)]);
       }
-      if (url.pathname === '/api/session') return json({user:await session(req,env)});
+      if (url.pathname === '/api/session') {
+        const user=await session(req,env);
+        if(user)await sheetWrite({action:'registerClient',accountId:user.id,name:user.name},env);
+        return json({user});
+      }
       if (url.pathname === '/api/data') {
         const [config, result] = await Promise.all([sheetRead('config'), sheetRead('results')]);
         const rows = (result.results || []).slice(1);
@@ -69,10 +82,8 @@ export default {
         if (body.action === 'saveConfig' && !user.admin) return json({ok:false,error:'ไม่มีสิทธิ์ผู้ดูแล'},403);
         if (!['vote','saveConfig'].includes(body.action)) return json({ok:false,error:'Unknown action'},400);
         body.voterId = user.id; body.voterEmail = user.email;
-        const payload = JSON.stringify(body);
-        const result = await fetch(SHEET,{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify({payload,signature:await hmac(payload,env.JIRA_CLIENT_SECRET)})});
-        if (!result.ok) return json({ok:false,error:'Google Sheet ไม่ตอบกลับ'},502);
-        return json(await result.json());
+        delete body.candidates;
+        try {return json(await sheetWrite(body,env));}catch(e){return json({ok:false,error:e.message},400);}
       }
       if (url.pathname.startsWith('/api/')) return json({error:'Not found'},404);
       if (url.pathname === '/client.js') return new Response(CLIENT,{headers:{'Content-Type':'text/javascript; charset=utf-8','Cache-Control':'no-store'}});

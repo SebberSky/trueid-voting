@@ -30,6 +30,7 @@ function doPost(e) {
       .map(byte => ('0' + ((byte + 256) % 256).toString(16)).slice(-2)).join('');
     if (request.signature !== signature) throw new Error('Unauthorized');
     const body = JSON.parse(request.payload);
+    if (body.action === 'registerClient') return json_(registerClient_(body));
     if (body.action === 'vote') return json_(recordVote_(body));
     if (body.action === 'saveConfig') return json_(saveConfig_(body));
     return json_({ ok: false, error: 'Unknown action' });
@@ -67,18 +68,11 @@ function saveConfig_(body) {
   const topic = String(body.topic || '').trim(), endAt = String(body.endAt || '');
   if (!topic) throw Error('กรุณาระบุชื่อกิจกรรม');
   if (!Number.isFinite(Date.parse(endAt)) || Date.parse(endAt) <= Date.now()) throw Error('กรุณากำหนดวันสิ้นสุดในอนาคต');
-  const names = Array.isArray(body.candidates) ? body.candidates.map(String).map(s=>s.trim()).filter(Boolean) : getCandidates_().map(c=>c.name);
   const awards = Array.isArray(body.awards) ? body.awards.map(String).map(s=>s.trim()).filter(Boolean) : old.awards;
-  if (!names.length || names.length > 500 || new Set(names).size !== names.length) throw Error('กรุณาระบุรายชื่อที่ไม่ซ้ำกัน 1–500 คน');
   if (!awards.length || awards.length > 50) throw Error('กรุณาระบุรางวัล 1–50 อันดับ');
-  const candidates = getCandidates_();
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  if (ss.getSheetByName(SHEETS.votes).getLastRow() > 1 && JSON.stringify(names) !== JSON.stringify(candidates.map(c=>c.name))) throw Error('แก้รายชื่อไม่ได้หลังมีผู้โหวตแล้ว');
   const values = [['key', 'value'], ['activityId', old.activityId || Utilities.getUuid()], ['topic', topic], ['endAt', endAt], ['status', body.status === 'closed' ? 'closed' : 'open'], ['awards', JSON.stringify(awards)]];
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEETS.config) || SpreadsheetApp.getActiveSpreadsheet().insertSheet(SHEETS.config);
   sheet.clearContents(); sheet.getRange(1, 1, values.length, 2).setValues(values);
-  const rows = [['candidateId','name','team','active'], ...names.map(name=>{const c=candidates.find(x=>x.name===name);return[c?c.candidateId:Utilities.getUuid(),name,c?c.team:'','TRUE'];})];
-  const candidateSheet = ss.getSheetByName(SHEETS.candidates); candidateSheet.clearContents(); candidateSheet.getRange(1,1,rows.length,4).setValues(rows);
   refreshResults_();
   return { ok: true, config: getConfig_() };
 }
@@ -88,7 +82,24 @@ function getConfig_() {
   if (!sheet) return { exists: false, topic: '', endAt: '', status: 'none', awards: [], candidates: [] };
   const config = {}; sheet.getDataRange().getValues().slice(1).forEach(row => config[row[0]] = row[1]);
   const exists = Boolean(config.activityId && config.topic);
-  return { exists, activityId: config.activityId || '', topic: exists ? config.topic : '', endAt: exists ? (config.endAt || '') : '', status: exists ? (config.status || 'closed') : 'none', awards: exists ? JSON.parse(config.awards || '[]') : [], candidates: exists ? getCandidates_() : [] };
+  const candidates = getCandidates_();
+  return { exists, candidateCount: candidates.filter(c=>c.active).length, activityId: config.activityId || '', topic: exists ? config.topic : '', endAt: exists ? (config.endAt || '') : '', status: exists ? (config.status || 'closed') : 'none', awards: exists ? JSON.parse(config.awards || '[]') : [], candidates: exists ? candidates : [] };
+}
+
+function registerClient_(body) {
+  const id=String(body.accountId||'').trim(),name=String(body.name||'').trim();
+  if(!id||!name)throw Error('Missing Jira account');
+  const lock=LockService.getScriptLock();lock.waitLock(10000);
+  try {
+    const ss=SpreadsheetApp.getActiveSpreadsheet();
+    ensureSheet_(ss,SHEETS.candidates,[['candidateId','name','team','active']]);
+    const sheet=ss.getSheetByName(SHEETS.candidates),rows=sheet.getDataRange().getValues();
+    const index=rows.findIndex((r,i)=>i>0&&String(r[0])===id);
+    const safeName=/^[=+@-]/.test(name)?"'"+name:name;
+    if(index<0)sheet.appendRow([id,safeName,'','TRUE']);
+    else if(String(rows[index][1])!==name)sheet.getRange(index+1,2).setValue(safeName);
+    return {ok:true};
+  } finally {lock.releaseLock();}
 }
 
 function getCandidates_() {
@@ -98,7 +109,7 @@ function getCandidates_() {
 }
 
 function refreshResults_() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet(); const votes = ss.getSheetByName(SHEETS.votes).getDataRange().getValues().slice(1); const candidates = getCandidates_();
+  const ss = SpreadsheetApp.getActiveSpreadsheet(); const votes = ss.getSheetByName(SHEETS.votes).getDataRange().getValues().slice(1); const candidates = getConfig_().exists ? getCandidates_().filter(c=>c.active) : [];
   const counts = {}; votes.forEach(row => counts[row[2]] = (counts[row[2]] || 0) + 1);
   const awards = getConfig_().awards;
   const output = candidates.map(c => ({ c, votes: counts[c.candidateId] || 0 })).sort((a, b) => b.votes - a.votes).map((x, i) => [i + 1, x.c.candidateId, x.c.name, x.votes, awards[i] || '']);

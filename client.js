@@ -27,7 +27,7 @@ function renderActivityState() {
   $('#createActivityBtn').hidden=!user?.admin;
   $('#emptyWaiting').hidden=Boolean(user?.admin);
   $('#emptyLoginHint').hidden=Boolean(user);
-  $('#emptyDescription').textContent=user?.admin?'เริ่มกิจกรรมแรกของทีม กำหนดหัวข้อ ผู้เข้าชิง วันสิ้นสุด และรางวัลตามอันดับได้เลย':'เมื่อผู้ดูแลเปิดกิจกรรม คุณจะสามารถเลือกผู้เข้าชิงและโหวตได้ที่นี่';
+  $('#emptyDescription').textContent=user?.admin?'เริ่มกิจกรรมแรกของทีม กำหนดหัวข้อ วันสิ้นสุด และรางวัลตามอันดับ รายชื่อผู้เข้าชิงมาจากผู้ใช้ Client ทั้งหมดโดยอัตโนมัติ':'เมื่อผู้ดูแลเปิดกิจกรรม คุณจะสามารถเลือกผู้เข้าชิงและโหวตได้ที่นี่';
   $('#adminFormTitle').textContent=exists?'ตั้งค่ากิจกรรมโหวต':'สร้างกิจกรรมโหวต';
   $('#adminSaveSettings').textContent=exists?'บันทึกการตั้งค่า':'สร้างและเปิดโหวต';
   $('[data-panel="admin"] .section-title').hidden=!exists;
@@ -50,10 +50,11 @@ async function loadData() {
   $('.deadline strong').textContent=data.config.endAt ? new Date(data.config.endAt).toLocaleString('th-TH') : 'ยังไม่ได้กำหนด';
   $('#adminTopicInput').value=data.config.topic || '';
   $('#adminEndDateInput').value='';
-  $('#adminCandidates').value=data.candidates.map(c=>c.name).join('\n');
+  $('#candidateSourceCount').textContent=`ผู้ใช้ Client ทั้งหมด · ${data.config.candidateCount||0} คน`;
   $('#adminAwards').value=(data.config.awards||[]).join('\n');
   if(data.config.endAt){const d=new Date(data.config.endAt);$('#adminEndDateInput').value=new Date(d-d.getTimezoneOffset()*60000).toISOString().slice(0,16);}
-  $('#candidateList').replaceChildren(...data.candidates.map(c=>{const option=document.createElement('option');option.value=c.name;return option;}));
+  data.candidates.forEach(c=>c.label=c.name+(data.candidates.filter(other=>other.name===c.name).length>1?' · '+c.id.slice(-6):''));
+  $('#candidateList').replaceChildren(...data.candidates.map(c=>{const option=document.createElement('option');option.value=c.label;return option;}));
   $('#candidateSearch').disabled=!data.candidates.length;
   $('#searchVoteBtn').disabled=data.config.status!=='open'||!data.candidates.length||(data.config.endAt&&Date.parse(data.config.endAt)<Date.now());
   const awards=$('[data-panel="admin"] .awards');awards.replaceChildren();
@@ -61,9 +62,18 @@ async function loadData() {
   const results=$('#realResults'); results.replaceChildren();
   data.results.forEach(r=>{const p=document.createElement('p');p.textContent=`${r.rank}. ${r.name} — ${r.votes} คะแนน${r.award ? ' · '+r.award : ''}`;results.append(p);});
 }
+$('#candidateSearch').addEventListener('focus',async()=>{
+  if(!data?.config.exists)return;
+  try {
+    const latest=await api('/api/data');
+    data.candidates=latest.candidates;
+    data.candidates.forEach(c=>c.label=c.name+(data.candidates.filter(other=>other.name===c.name).length>1?' · '+c.id.slice(-6):''));
+    $('#candidateList').replaceChildren(...data.candidates.map(c=>{const option=document.createElement('option');option.value=c.label;return option;}));
+  } catch(e){message(e.message);}
+});
 $('#searchVoteBtn').onclick=async()=>{
   if(!user){$('#modal').classList.add('open');return;}
-  const matches=data.candidates.filter(c=>c.name===$('#candidateSearch').value.trim());
+  const matches=data.candidates.filter(c=>c.label===$('#candidateSearch').value.trim());
   if(matches.length!==1){message('กรุณาเลือกชื่อผู้เข้าชิงจากรายการ');return;}
   const button=$('#searchVoteBtn');button.disabled=true;
   try{await api('/api/sheet',{action:'vote',candidateId:matches[0].id});message('บันทึกโหวตลง Google Sheet แล้ว');button.textContent='โหวตเรียบร้อยแล้ว';await loadData();button.disabled=true;}catch(e){message(e.message==='Already voted'?'คุณโหวตไปแล้ว':e.message);button.disabled=false;}
@@ -71,11 +81,11 @@ $('#searchVoteBtn').onclick=async()=>{
 $('#adminSaveSettings').onclick=async()=>{
   const button=$('#adminSaveSettings'),creating=!data?.config.exists;
   const topic=$('#adminTopicInput').value.trim(),date=$('#adminEndDateInput').value;
-  const candidates=$('#adminCandidates').value.split('\n').map(s=>s.trim()).filter(Boolean),awards=$('#adminAwards').value.split('\n').map(s=>s.trim()).filter(Boolean);
-  if(!topic||!date||!candidates.length||!awards.length){message('กรุณากรอกหัวข้อ วันสิ้นสุด ผู้เข้าชิง และรางวัลให้ครบ');return;}
+  const awards=$('#adminAwards').value.split('\n').map(s=>s.trim()).filter(Boolean);
+  if(!topic||!date||!awards.length){message('กรุณากรอกหัวข้อ วันสิ้นสุด และรางวัลให้ครบ');return;}
   if(new Date(date).getTime()<=Date.now()){message('กรุณากำหนดวันสิ้นสุดในอนาคต');return;}
   button.disabled=true;
-  try{await api('/api/sheet',{action:'saveConfig',topic,endAt:new Date(date).toISOString(),candidates,awards,status:'open'});await loadData();showMode('client');message(creating?'สร้างกิจกรรมและเปิดโหวตแล้ว':'บันทึกการตั้งค่าแล้ว');}catch(e){message(e.message);}finally{button.disabled=false;}
+  try{await api('/api/sheet',{action:'saveConfig',topic,endAt:new Date(date).toISOString(),awards,status:'open'});await loadData();showMode('client');message(creating?'สร้างกิจกรรมและเปิดโหวตแล้ว':'บันทึกการตั้งค่าแล้ว');}catch(e){message(e.message);}finally{button.disabled=false;}
 };
 (async()=>{
   localStorage.removeItem('voterId');localStorage.removeItem('jiraEmail');
