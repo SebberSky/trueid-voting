@@ -43,6 +43,7 @@ $('[data-mode="admin"]').hidden=true;
 $('#searchVoteBtn').disabled=true;
 async function loadData() {
   data = await api('/api/data');
+  $('#loadingState').hidden=true;
   renderActivityState();
   $('.intro h1').textContent=data.config.topic || 'ยังไม่ได้กำหนดหัวข้อการโหวต';
   $('.intro .eyebrow').textContent=data.config.status==='open'?'เปิดโหวตอยู่':'ปิดโหวตแล้ว';
@@ -80,5 +81,5 @@ $('#adminSaveSettings').onclick=async()=>{
   localStorage.removeItem('voterId');localStorage.removeItem('jiraEmail');
   try{const result=await api('/api/session');user=result.user;if(user){$('#loginBtn').textContent=user.name+' · ออกจากระบบ';$('#loginBtn').onclick=()=>{const form=document.createElement('form');form.method='POST';form.action='/auth/logout';document.body.append(form);form.submit();};$('.landing').hidden=true;$('[data-mode="admin"]').hidden=!user.admin;$('#loginStatus').textContent='เข้าสู่ระบบแล้ว: '+user.name;}}
   catch(e){message(e.message);}
-  try{await loadData();}catch(e){$('#emptyState').hidden=false;$('#emptyState h1').textContent='โหลดข้อมูลไม่สำเร็จ';$('#emptyDescription').textContent='กรุณารีเฟรชหน้าเว็บเพื่อลองอีกครั้ง';$('#emptyWaiting').hidden=true;message(e.message);}
+  try{await loadData();}catch(e){$('#loadingState').hidden=true;$('#emptyState').hidden=false;$('#emptyState h1').textContent='โหลดข้อมูลไม่สำเร็จ';$('#emptyDescription').textContent='กรุณารีเฟรชหน้าเว็บเพื่อลองอีกครั้ง';$('#emptyWaiting').hidden=true;message(e.message);}
 })();
