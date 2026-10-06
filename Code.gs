@@ -26,7 +26,7 @@ function doPost(e) {
     const request = JSON.parse((e && e.postData && e.postData.contents) || '{}');
     const secret = PropertiesService.getScriptProperties().getProperty('JIRA_CLIENT_SECRET');
     if (!request.payload || !secret) throw new Error('Unauthorized');
-    const signature = Utilities.computeHmacSha256Signature(request.payload, secret)
+    const signature = Utilities.computeHmacSha256Signature(request.payload, secret, Utilities.Charset.UTF_8)
       .map(byte => ('0' + ((byte + 256) % 256).toString(16)).slice(-2)).join('');
     if (request.signature !== signature) throw new Error('Unauthorized');
     const body = JSON.parse(request.payload);
