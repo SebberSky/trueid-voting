@@ -6,6 +6,10 @@ const CHAT_CALLBACK = ORIGIN+'/oauth/google-chat/callback';
 const CHAT_SCOPE = 'https://www.googleapis.com/auth/chat.memberships.readonly';
 function votingEnvironment(env) {return {environment:env.VOTING_ENV||'production',candidateSource:env.CANDIDATE_SOURCE||'client_and_chat',spaceName:env.GOOGLE_CHAT_SPACE_NAME||'Google Chat'};}
 function syncBody(env,members) {return {action:'syncChatMembers',members,spaceId:env.GOOGLE_CHAT_SPACE_ID,environment:votingEnvironment(env).environment,candidateSource:votingEnvironment(env).candidateSource,syncedAt:new Date().toISOString()};}
+function announcementDeadline(value) {
+  const p=Object.fromEntries(new Intl.DateTimeFormat('th-TH-u-ca-gregory',{timeZone:'Asia/Bangkok',day:'2-digit',month:'long',year:'numeric',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(new Date(value)).map(p=>[p.type,p.value]));
+  return `${p.day} ${p.month} ${p.year} · ${p.hour}:${p.minute} น.`;
+}
 const enc = new TextEncoder();
 const json = (data, status = 200) => Response.json(data, {status, headers: {'Cache-Control':'no-store'}});
 const cookie = (name, value, age) => `${name}=${value}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${age}`;
@@ -168,6 +172,33 @@ export default {
           }catch(e){return json({ok:false,error:e.message},400);}
         }
         return json({ok:false,error:'Method not allowed'},405);
+      }
+      if (url.pathname === '/api/announcement') {
+        if(req.method!=='POST')return json({error:'Method not allowed'},405);
+        const user=await session(req,env);
+        if(!user)return json({error:'กรุณาเข้าสู่ระบบก่อน'},401);
+        if(!user.admin||req.headers.get('Origin')!==ORIGIN)return json({error:'เฉพาะผู้ดูแลจากเว็บนี้เท่านั้น'},403);
+        const config=await sheetRead('config'),mode=votingEnvironment(env);
+        if(!config.exists||config.status!=='open'||!Number.isFinite(Date.parse(config.endAt))||Date.parse(config.endAt)<=Date.now())return json({error:'ต้องมีกิจกรรมที่เปิดโหวตและยังไม่สิ้นสุดก่อนประกาศ'},400);
+        const expected={test:'AAQA0MkG6JM',production:'AAQASHHP1Y4'}[mode.environment];
+        let target;
+        try{target=new URL(env.GOOGLE_CHAT_WEBHOOK_URL);}catch{return json({error:'ยังไม่ได้ตั้งค่า webhook ของห้องนี้'},400);}
+        if(!expected||env.GOOGLE_CHAT_SPACE_ID!==expected||config.chatSpaceId!==expected||target.origin!=='https://chat.googleapis.com'||target.pathname!=='/v1/spaces/'+expected+'/messages'||!target.searchParams.get('key')||!target.searchParams.get('token'))return json({error:'ห้องหรือ webhook ไม่ตรงกับ environment หยุดส่งเพื่อความปลอดภัย'},400);
+        const fingerprint=await hmac(JSON.stringify([config.activityId,config.topic,config.endAt,mode.environment,expected]),env.JIRA_CLIENT_SECRET),requestId=crypto.randomUUID();
+        const claim=await sheetWrite({action:'claimAnnouncement',activityId:config.activityId,topic:config.topic,endAt:config.endAt,environment:mode.environment,spaceId:expected,fingerprint,requestId},env);
+        if(claim.alreadySent)return json({ok:true,alreadySent:true});
+        const finish=state=>sheetWrite({action:'finishAnnouncement',requestId,...state},env);
+        const topic=String(config.topic).slice(0,200).replace(/[<>]/g,'');
+        const text=`TrueID Voting — เปิดโหวต\n${topic}\nทุกบัญชีโหวตได้ครั้งเดียว\nสิ้นสุด ${announcementDeadline(config.endAt)} (เวลาไทย)\n${ORIGIN}/#vote`;
+        let response;
+        try{response=await fetch(target,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text}),signal:AbortSignal.timeout(15000)});}
+        catch{await finish({status:'unknown'});return json({error:'ยังยืนยันการส่งไม่ได้ กรุณาตรวจในห้องแชทก่อน ไม่ส่งซ้ำอัตโนมัติ'},502);}
+        if(!response.ok){await finish({status:response.status>=500?'unknown':'failed'});return json({error:'Chat ตอบกลับ HTTP '+response.status+' ไม่ส่งซ้ำอัตโนมัติ'},502);}
+        let receipt;try{receipt=await response.json();}catch{}
+        if(!String(receipt?.name||'').startsWith('spaces/'+expected+'/messages/')){await finish({status:'unknown'});return json({error:'ไม่มีใบยืนยันจาก Chat กรุณาตรวจในห้องก่อน ไม่ส่งซ้ำอัตโนมัติ'},502);}
+        try{await finish({status:'sent',messageName:receipt.name});}
+        catch{return json({error:'Chat รับข้อความแล้ว แต่บันทึกสถานะไม่สำเร็จ กรุณาตรวจในห้องก่อน ไม่ส่งซ้ำ'},502);}
+        return json({ok:true,alreadySent:false,spaceName:mode.spaceName});
       }
       if (url.pathname === '/api/data') {
         const [config, result] = await Promise.all([sheetRead('config'), sheetRead('results')]);

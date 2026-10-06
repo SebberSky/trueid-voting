@@ -37,6 +37,8 @@ function doPost(e) {
     if (body.action === 'saveConfig') return json_(saveConfig_(body));
     if (body.action === 'syncChatMembers') return json_(syncChatMembers_(body));
     if (body.action === 'chatStatus') return json_(chatStatus_());
+    if (body.action === 'claimAnnouncement') return json_(claimAnnouncement_(body));
+    if (body.action === 'finishAnnouncement') return json_(finishAnnouncement_(body));
     if (body.action === 'getChatConnection') return json_({ok:true,refreshToken:PropertiesService.getScriptProperties().getProperty('GOOGLE_CHAT_REFRESH_TOKEN')||''});
     if (body.action === 'saveChatConnection') {
       if(typeof body.refreshToken!=='string'||body.refreshToken.length<20||body.refreshToken.length>4096)throw Error('Invalid refresh token');
@@ -179,6 +181,31 @@ function chatStatus_() {
   return {ok:true,...getVotingEnvironment_(),count:members.length,syncedAt:properties.getProperty('CHAT_LAST_SYNC_AT')||null,hasSavedConnection:Boolean(properties.getProperty('GOOGLE_CHAT_REFRESH_TOKEN')),members};
 }
 function safeSheetText_(value) {return /^[=+@-]/.test(value)?"'"+value:value;}
+
+function claimAnnouncement_(body) {
+  const lock=LockService.getScriptLock();lock.waitLock(10000);
+  try {
+    const config=getConfig_(),props=PropertiesService.getScriptProperties();
+    if(!config.exists||config.status!=='open'||Date.parse(config.endAt)<=Date.now()||config.activityId!==body.activityId||config.topic!==body.topic||String(config.endAt)!==body.endAt||config.environment!==body.environment||config.chatSpaceId!==body.spaceId)throw Error('กิจกรรมหรือห้องเปลี่ยนแล้ว กรุณารีเฟรชก่อนประกาศ');
+    if(!/^[a-f0-9]{64}$/.test(body.fingerprint||'')||!body.requestId)throw Error('Invalid announcement request');
+    const old=JSON.parse(props.getProperty('ACTIVITY_ANNOUNCEMENT_STATE')||'{}');
+    // Unknown/in-flight delivery requires manual verification even if settings changed.
+    if(['sending','unknown'].includes(old.status))throw Error('ประกาศก่อนหน้ายังไม่ยืนยัน กรุณาตรวจห้องแชทก่อน ไม่ส่งซ้ำ');
+    if(old.fingerprint===body.fingerprint&&old.status==='sent')return {ok:true,alreadySent:true};
+    props.setProperty('ACTIVITY_ANNOUNCEMENT_STATE',JSON.stringify({fingerprint:body.fingerprint,requestId:body.requestId,activityId:body.activityId,environment:body.environment,spaceId:body.spaceId,status:'sending',attemptAt:new Date().toISOString()}));
+    return {ok:true,alreadySent:false};
+  }finally{lock.releaseLock();}
+}
+function finishAnnouncement_(body) {
+  const lock=LockService.getScriptLock();lock.waitLock(10000);
+  try {
+    const props=PropertiesService.getScriptProperties(),state=JSON.parse(props.getProperty('ACTIVITY_ANNOUNCEMENT_STATE')||'{}');
+    if(state.requestId!==body.requestId||state.status!=='sending'||!['sent','failed','unknown'].includes(body.status))throw Error('Invalid announcement result');
+    if(body.status==='sent'&&!String(body.messageName||'').startsWith('spaces/'+state.spaceId+'/messages/'))throw Error('Invalid message receipt');
+    state.status=body.status;state.completedAt=new Date().toISOString();if(body.status==='sent')state.messageName=body.messageName;
+    props.setProperty('ACTIVITY_ANNOUNCEMENT_STATE',JSON.stringify(state));return {ok:true};
+  }finally{lock.releaseLock();}
+}
 
 function getCandidates_() {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEETS.candidates);
