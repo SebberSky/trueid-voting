@@ -1,0 +1,53 @@
+const $ = s => document.querySelector(s);
+const toast = $('#toast');
+let user = null, data = null;
+function message(text) { toast.textContent=text; toast.classList.add('show'); setTimeout(()=>toast.classList.remove('show'),4000); }
+async function api(path, body) {
+  const response = await fetch(path,body ? {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)} : {});
+  const result = await response.json();
+  if (!response.ok || result.ok === false) throw Error(result.error || 'เชื่อมต่อไม่สำเร็จ');
+  return result;
+}
+function showMode(mode) {
+  if(mode==='admin'&&!user?.admin)return;
+  document.querySelectorAll('[data-mode]').forEach(b=>b.classList.toggle('active',b.dataset.mode===mode));
+  document.querySelectorAll('[data-panel]').forEach(p=>p.classList.toggle('active',p.dataset.panel===mode));
+}
+$('#loginBtn').onclick=()=>location.assign('/auth/login');
+$('#jiraLogin').onclick=()=>location.assign('/auth/login');
+$('#cancel').onclick=()=>$('#modal').classList.remove('open');
+document.querySelectorAll('[data-mode]').forEach(b=>b.onclick=()=>showMode(b.dataset.mode));
+$('[data-mode="admin"]').hidden=true;
+$('#searchVoteBtn').disabled=true;
+async function loadData() {
+  data = await api('/api/data');
+  $('.intro h1').textContent=data.config.topic || 'ยังไม่ได้กำหนดหัวข้อการโหวต';
+  $('.intro .eyebrow').textContent=data.config.status==='open'?'เปิดโหวตอยู่':'ปิดโหวตแล้ว';
+  $('.deadline strong').textContent=data.config.endAt ? new Date(data.config.endAt).toLocaleString('th-TH') : 'ยังไม่ได้กำหนด';
+  $('#adminTopicInput').value=data.config.topic || '';
+  if(data.config.endAt){const d=new Date(data.config.endAt);$('#adminEndDateInput').value=new Date(d-d.getTimezoneOffset()*60000).toISOString().slice(0,16);}
+  $('#candidateList').replaceChildren(...data.candidates.map(c=>{const option=document.createElement('option');option.value=c.name;return option;}));
+  $('#candidateSearch').disabled=!data.candidates.length;
+  $('#searchVoteBtn').disabled=data.config.status!=='open'||!data.candidates.length||(data.config.endAt&&Date.parse(data.config.endAt)<Date.now());
+  const awards=$('[data-panel="admin"] .awards');awards.replaceChildren();
+  data.results.filter(r=>r.award).forEach(r=>{const item=document.createElement('article');item.className='award';const rank=document.createElement('span');rank.className='rank';rank.textContent='อันดับ '+r.rank;const title=document.createElement('h3');title.textContent=r.award;item.append(rank,title);awards.append(item);});
+  const results=$('#realResults'); results.replaceChildren();
+  data.results.forEach(r=>{const p=document.createElement('p');p.textContent=`${r.rank}. ${r.name} — ${r.votes} คะแนน${r.award ? ' · '+r.award : ''}`;results.append(p);});
+  if(!data.candidates.length) message('ยังไม่มีรายชื่อผู้เข้าชิงใน Google Sheet');
+}
+$('#searchVoteBtn').onclick=async()=>{
+  if(!user){$('#modal').classList.add('open');return;}
+  const matches=data.candidates.filter(c=>c.name===$('#candidateSearch').value.trim());
+  if(matches.length!==1){message('กรุณาเลือกชื่อผู้เข้าชิงจากรายการ');return;}
+  const button=$('#searchVoteBtn');button.disabled=true;
+  try{await api('/api/sheet',{action:'vote',candidateId:matches[0].id});message('บันทึกโหวตลง Google Sheet แล้ว');button.textContent='โหวตเรียบร้อยแล้ว';await loadData();button.disabled=true;}catch(e){message(e.message==='Already voted'?'คุณโหวตไปแล้ว':e.message);button.disabled=false;}
+};
+$('#adminSaveSettings').onclick=async()=>{
+  try{const date=$('#adminEndDateInput').value;await api('/api/sheet',{action:'saveConfig',topic:$('#adminTopicInput').value.trim(),endAt:date ? new Date(date).toISOString() : '',status:'open'});await loadData();message('บันทึกการตั้งค่าแล้ว');}catch(e){message(e.message);}
+};
+(async()=>{
+  localStorage.removeItem('voterId');localStorage.removeItem('jiraEmail');
+  try{const result=await api('/api/session');user=result.user;if(user){$('#loginBtn').textContent=user.name+' · ออกจากระบบ';$('#loginBtn').onclick=()=>{const form=document.createElement('form');form.method='POST';form.action='/auth/logout';document.body.append(form);form.submit();};$('.landing').hidden=true;$('[data-mode="admin"]').hidden=!user.admin;$('#loginStatus').textContent='เข้าสู่ระบบแล้ว: '+user.name;}}
+  catch(e){message(e.message);}
+  try{await loadData();}catch(e){$('.intro h1').textContent='โหลดข้อมูลการโหวตไม่สำเร็จ';message(e.message);}
+})();
