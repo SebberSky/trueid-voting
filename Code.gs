@@ -7,8 +7,8 @@ const SHEETS = { config: 'Config', candidates: 'Candidates', votes: 'Votes', res
 
 function setup() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  ensureSheet_(ss, SHEETS.config, [['key', 'value'], ['topic', 'รางวัลประจำไตรมาส Q3/2026'], ['endAt', '2026-10-10T18:00'], ['status', 'open']]);
-  ensureSheet_(ss, SHEETS.candidates, [['candidateId', 'name', 'team', 'active'], ['ploy-m', 'Ploy M.', 'Product Design', 'TRUE'], ['ton-n', 'Ton N.', 'Engineering', 'TRUE'], ['kate-s', 'Kate S.', 'Marketing', 'TRUE']]);
+  ensureSheet_(ss, SHEETS.config, [['key', 'value']]);
+  ensureSheet_(ss, SHEETS.candidates, [['candidateId', 'name', 'team', 'active']]);
   ensureSheet_(ss, SHEETS.votes, [['votedAt', 'voterId', 'candidateId', 'voterEmail']]);
   ensureSheet_(ss, SHEETS.results, [['rank', 'candidateId', 'name', 'votes', 'award']]);
   return json_({ ok: true, message: 'Sheets are ready' });
@@ -63,17 +63,32 @@ function recordVoteLocked_(body) {
 }
 
 function saveConfig_(body) {
-  const values = [['key', 'value'], ['topic', String(body.topic || '')], ['endAt', String(body.endAt || '')], ['status', body.status === 'closed' ? 'closed' : 'open']];
+  const old = getConfig_();
+  const topic = String(body.topic || '').trim(), endAt = String(body.endAt || '');
+  if (!topic) throw Error('กรุณาระบุชื่อกิจกรรม');
+  if (!Number.isFinite(Date.parse(endAt)) || Date.parse(endAt) <= Date.now()) throw Error('กรุณากำหนดวันสิ้นสุดในอนาคต');
+  const names = Array.isArray(body.candidates) ? body.candidates.map(String).map(s=>s.trim()).filter(Boolean) : getCandidates_().map(c=>c.name);
+  const awards = Array.isArray(body.awards) ? body.awards.map(String).map(s=>s.trim()).filter(Boolean) : old.awards;
+  if (!names.length || names.length > 500 || new Set(names).size !== names.length) throw Error('กรุณาระบุรายชื่อที่ไม่ซ้ำกัน 1–500 คน');
+  if (!awards.length || awards.length > 50) throw Error('กรุณาระบุรางวัล 1–50 อันดับ');
+  const candidates = getCandidates_();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (ss.getSheetByName(SHEETS.votes).getLastRow() > 1 && JSON.stringify(names) !== JSON.stringify(candidates.map(c=>c.name))) throw Error('แก้รายชื่อไม่ได้หลังมีผู้โหวตแล้ว');
+  const values = [['key', 'value'], ['activityId', old.activityId || Utilities.getUuid()], ['topic', topic], ['endAt', endAt], ['status', body.status === 'closed' ? 'closed' : 'open'], ['awards', JSON.stringify(awards)]];
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEETS.config) || SpreadsheetApp.getActiveSpreadsheet().insertSheet(SHEETS.config);
   sheet.clearContents(); sheet.getRange(1, 1, values.length, 2).setValues(values);
+  const rows = [['candidateId','name','team','active'], ...names.map(name=>{const c=candidates.find(x=>x.name===name);return[c?c.candidateId:Utilities.getUuid(),name,c?c.team:'','TRUE'];})];
+  const candidateSheet = ss.getSheetByName(SHEETS.candidates); candidateSheet.clearContents(); candidateSheet.getRange(1,1,rows.length,4).setValues(rows);
+  refreshResults_();
   return { ok: true, config: getConfig_() };
 }
 
 function getConfig_() {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEETS.config);
-  if (!sheet) return { topic: '', endAt: '', status: 'closed' };
+  if (!sheet) return { exists: false, topic: '', endAt: '', status: 'none', awards: [], candidates: [] };
   const config = {}; sheet.getDataRange().getValues().slice(1).forEach(row => config[row[0]] = row[1]);
-  return { topic: config.topic || '', endAt: config.endAt || '', status: config.status || 'closed' };
+  const exists = Boolean(config.activityId && config.topic);
+  return { exists, activityId: config.activityId || '', topic: exists ? config.topic : '', endAt: exists ? (config.endAt || '') : '', status: exists ? (config.status || 'closed') : 'none', awards: exists ? JSON.parse(config.awards || '[]') : [], candidates: exists ? getCandidates_() : [] };
 }
 
 function getCandidates_() {
@@ -85,7 +100,7 @@ function getCandidates_() {
 function refreshResults_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet(); const votes = ss.getSheetByName(SHEETS.votes).getDataRange().getValues().slice(1); const candidates = getCandidates_();
   const counts = {}; votes.forEach(row => counts[row[2]] = (counts[row[2]] || 0) + 1);
-  const awards = ['Impact Maker', 'Team Player', 'Bright Spark', 'Rising Star'];
+  const awards = getConfig_().awards;
   const output = candidates.map(c => ({ c, votes: counts[c.candidateId] || 0 })).sort((a, b) => b.votes - a.votes).map((x, i) => [i + 1, x.c.candidateId, x.c.name, x.votes, awards[i] || '']);
   const sheet = ss.getSheetByName(SHEETS.results) || ss.insertSheet(SHEETS.results); sheet.clearContents(); sheet.getRange(1, 1, 1, 5).setValues([['rank', 'candidateId', 'name', 'votes', 'award']]);
   if (output.length) sheet.getRange(2, 1, output.length, 5).setValues(output);
@@ -94,3 +109,14 @@ function refreshResults_() {
 function getResults_() { refreshResults_(); const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEETS.results); return { ok: true, results: sheet.getDataRange().getValues() }; }
 function ensureSheet_(ss, name, values) { let sheet = ss.getSheetByName(name); if (!sheet) sheet = ss.insertSheet(name); if (sheet.getLastRow() === 0) sheet.getRange(1, 1, values.length, values[0].length).setValues(values); }
 function json_(value) { return ContentService.createTextOutput(JSON.stringify(value)).setMimeType(ContentService.MimeType.JSON); }
+
+function removeSeededDemo() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const config = ss.getSheetByName(SHEETS.config), candidates = ss.getSheetByName(SHEETS.candidates), votes = ss.getSheetByName(SHEETS.votes);
+  const settings = {}; config.getDataRange().getValues().slice(1).forEach(r=>settings[r[0]]=r[1]);
+  const ids = candidates.getDataRange().getValues().slice(1).filter(r=>r[0]).map(r=>String(r[0])).sort().join(',');
+  if (settings.topic !== 'รางวัลประจำไตรมาส Q3/2026' || ids !== 'kate-s,ploy-m,ton-n' || votes.getLastRow() > 1) throw Error('Cleanup stopped: data differs from the seeded demo');
+  const stamp = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyyMMdd_HHmmss');
+  [SHEETS.config,SHEETS.candidates,SHEETS.results].forEach(name=>{const sheet=ss.getSheetByName(name);sheet.copyTo(ss).setName('DemoBackup_'+name+'_'+stamp).hideSheet();sheet.clearContents();});
+  setup(); Logger.log('Removed seeded demo; hidden backups preserved.');
+}

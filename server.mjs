@@ -59,7 +59,7 @@ export default {
       if (url.pathname === '/api/data') {
         const [config, result] = await Promise.all([sheetRead('config'), sheetRead('results')]);
         const rows = (result.results || []).slice(1);
-        return json({config,candidates:rows.map(r=>({id:r[1],name:r[2]})),results:rows.map(r=>({rank:r[0],id:r[1],name:r[2],votes:r[3],award:r[4]}))});
+        return json({config,candidates:config.exists?(config.candidates||[]).filter(c=>c.active).map(c=>({id:c.candidateId,name:c.name})):[],results:config.exists?rows.map(r=>({rank:r[0],id:r[1],name:r[2],votes:r[3],award:r[4]})):[]});
       }
       if (url.pathname === '/api/sheet' && req.method === 'POST') {
         if (req.headers.get('Origin') !== ORIGIN) return json({ok:false,error:'Forbidden'},403);
