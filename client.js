@@ -88,17 +88,6 @@ $('#syncChatMembersBtn').onclick=async()=>{
   }catch(e){$('#chatSyncError').textContent=e.message;$('#chatSyncError').hidden=false;}
   finally{button.disabled=false;button.textContent='ซิงก์สมาชิกจาก Chat';}
 };
-$('#reconnectChatBtn').onclick=async()=>{
-  if(!user?.admin)return;
-  const field=$('#chatRefreshToken'),button=$('#reconnectChatBtn'),refreshToken=field.value.trim();
-  if(!refreshToken){message('กรุณาระบุ Refresh token ใหม่');return;}
-  button.disabled=true;$('#syncChatMembersBtn').disabled=true;$('#chatSyncError').hidden=true;
-  try {
-    const result=await api('/api/chat/connect',{refreshToken});field.value='';
-    await loadChatStatus();await loadData(true);message(`เชื่อมต่อและซิงก์สมาชิก ${result.count} คนแล้ว`);
-  }catch(e){field.value='';$('#chatSyncError').textContent=e.message;$('#chatSyncError').hidden=false;}
-  finally{button.disabled=false;$('#syncChatMembersBtn').disabled=false;}
-};
 $('#candidateSearch').addEventListener('focus',async()=>{
   if(!data?.config.exists)return;
   try {
@@ -130,4 +119,11 @@ $('#adminSaveSettings').onclick=async()=>{
   catch(e){message(e.message);}
   try{await loadData();}catch(e){$('#loadingState').hidden=true;$('#emptyState').hidden=false;$('#emptyState h1').textContent='โหลดข้อมูลไม่สำเร็จ';$('#emptyDescription').textContent='กรุณารีเฟรชหน้าเว็บเพื่อลองอีกครั้ง';$('#emptyWaiting').hidden=true;message(e.message);}
   if(user?.admin)try{await loadChatStatus();}catch(e){$('#memberAdmin').hidden=false;$('#chatSyncError').hidden=false;$('#chatSyncError').textContent=e.message;}
+  const chatResult=new URL(location.href).searchParams.get('chat');
+  if(chatResult){
+    const notices={connected:'เชื่อมต่อ Google และซิงก์รายชื่อแล้ว',denied:'ยกเลิกการอนุญาต Google รายชื่อเดิมยังอยู่',expired:'คำขอหมดอายุ กรุณากดเชื่อมต่อ Google ใหม่',unconfigured:'ยังไม่ได้ตั้งค่าการเชื่อมต่อ Google',failed:'เชื่อมต่อไม่สำเร็จ กรุณาเลือกบัญชี Google ที่เป็นสมาชิกห้อง และอนุญาตสิทธิ์อ่านสมาชิก'};
+    if(chatResult==='connected')message(notices.connected);
+    else if(user?.admin){$('#chatSyncError').hidden=false;$('#chatSyncError').textContent=notices[chatResult]||notices.failed;}
+    const clean=new URL(location.href);clean.searchParams.delete('chat');history.replaceState(null,'',clean.pathname+clean.search+clean.hash);
+  }
 })();

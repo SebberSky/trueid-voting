@@ -41,7 +41,7 @@ const oldFetch=globalThis.fetch;let writes=[],mode='ok',chatRequests=0;
 globalThis.fetch=async(input,options)=>{
   const url=String(input);
   if(url.startsWith('https://script.google.com/')){const wrapped=JSON.parse(options.body),body=JSON.parse(wrapped.payload);assert.equal(wrapped.signature,createHmac('sha256',env.JIRA_CLIENT_SECRET).update(wrapped.payload).digest('hex'));if(body.action==='getChatConnection')return Response.json({ok:true,refreshToken:''});writes.push(body);return Response.json({ok:true,count:body.members?.length||0});}
-  if(url==='https://oauth2.googleapis.com/token'){assert.equal(new URLSearchParams(options.body).get('grant_type'),'refresh_token');return mode==='expired'?Response.json({error:'invalid_grant'},{status:400}):Response.json({access_token:'test-access'});}
+  if(url==='https://oauth2.googleapis.com/token'){const params=new URLSearchParams(options.body);if(params.get('grant_type')==='authorization_code'){assert.equal(params.get('redirect_uri'),'https://trueid-voting.chawapon-rr.chatgpt.site/oauth/google-chat/callback');assert.ok(params.get('code_verifier'));return Response.json({access_token:'test-access',refresh_token:'new-test-refresh'});}assert.equal(params.get('grant_type'),'refresh_token');return mode==='expired'?Response.json({error:'invalid_grant'},{status:400}):Response.json({access_token:'test-access'});}
   if(url.startsWith('https://chat.googleapis.com/')){chatRequests++;if(new URL(url).searchParams.has('pageToken'))return mode==='page-fails'?Response.json({error:{}},{status:503}):Response.json({memberships:[{state:'JOINED',member:{type:'HUMAN',email:roster[1].email,displayName:roster[1].name,name:roster[1].chatUserId}}]});return Response.json({memberships:[{state:'JOINED',member:{type:'HUMAN',email:roster[0].email,displayName:roster[0].name,name:roster[0].chatUserId}}],nextPageToken:'second-page'});}
   throw Error('Unexpected request');
 };
@@ -54,5 +54,21 @@ try{
   assert.equal(JSON.stringify(result).includes('test-access'),false);
   mode='expired';writes=[];assert.equal((await worker.fetch(request('/api/chat/sync'),env)).status,400);assert.equal(writes.length,0);
   mode='page-fails';writes=[];assert.equal((await worker.fetch(request('/api/chat/sync'),env)).status,400);assert.equal(writes.length,0,'Partial pages must not replace roster');
+  mode='ok';writes=[];
+  const base='https://trueid-voting.chawapon-rr.chatgpt.site';
+  assert.equal((await worker.fetch(new Request(base+'/auth/google-chat'),env)).status,401);
+  assert.equal((await worker.fetch(new Request(base+'/auth/google-chat',{headers:{Cookie:userCookie(false)}}),env)).status,403);
+  const start=await worker.fetch(new Request(base+'/auth/google-chat',{headers:{Cookie:userCookie()}}),env);
+  const auth=new URL(start.headers.get('Location')),proofCookie=start.headers.get('Set-Cookie').split(';')[0];
+  assert.equal(auth.origin,'https://accounts.google.com');assert.equal(auth.searchParams.get('access_type'),'offline');
+  assert.equal(auth.searchParams.get('code_challenge_method'),'S256');assert.equal(auth.searchParams.get('scope'),'https://www.googleapis.com/auth/chat.memberships.readonly');
+  assert.ok(start.headers.get('Set-Cookie').includes('HttpOnly'));
+  const callback=(params,cookie=proofCookie)=>new Request(base+'/oauth/google-chat/callback?'+new URLSearchParams(params),{headers:{Cookie:userCookie()+'; '+cookie}});
+  const bad=await worker.fetch(callback({state:'wrong',code:'fake'}),env);assert.ok(bad.headers.get('Location').includes('chat=expired'));assert.equal(writes.length,0);
+  const denied=await worker.fetch(callback({state:auth.searchParams.get('state'),error:'access_denied'}),env);assert.ok(denied.headers.get('Location').includes('chat=denied'));assert.equal(writes.length,0);
+  const success=await worker.fetch(callback({state:auth.searchParams.get('state'),code:'test-code'}),env);
+  assert.ok(success.headers.get('Location').includes('chat=connected'));assert.ok(success.headers.get('Set-Cookie').includes('Max-Age=0'));
+  assert.deepEqual(writes.map(w=>w.action),['saveChatConnection','syncChatMembers']);
+  assert.equal(success.headers.get('Location').includes('test-refresh'),false);
 }finally{globalThis.fetch=oldFetch;}
-console.log('PASS: member sync, stable candidate IDs, no duplicates, removals, history, pagination, token expiry, admin authorization and CSRF');
+console.log('PASS: member sync, stable candidate IDs, pagination, admin authorization, OAuth callback, consent denial, state validation, PKCE and secret handling');

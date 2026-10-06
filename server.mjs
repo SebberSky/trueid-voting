@@ -2,6 +2,8 @@ const ORIGIN = 'https://trueid-voting.chawapon-rr.chatgpt.site';
 const SHEET = 'https://script.google.com/macros/s/AKfycbxOSQQdiI2e07sRRkQ7mltkTadgF4gwVMxgwpzfGyZJ33P8MzDwWw21c4Nv8ZSgl_Yi/exec';
 const ADMINS = ['chawapon.k@muze.co.th', 'kittisak.bua@truedigital.com'];
 const CHAT_DOMAINS = new Set(['muze.co.th', 'truedigital.com']);
+const CHAT_CALLBACK = ORIGIN+'/oauth/google-chat/callback';
+const CHAT_SCOPE = 'https://www.googleapis.com/auth/chat.memberships.readonly';
 const enc = new TextEncoder();
 const json = (data, status = 200) => Response.json(data, {status, headers: {'Cache-Control':'no-store'}});
 const cookie = (name, value, age) => `${name}=${value}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${age}`;
@@ -75,6 +77,40 @@ export default {
   async fetch(req, env) {
     const url = new URL(req.url);
     try {
+      if (url.pathname === '/auth/google-chat') {
+        const user=await session(req,env);
+        if(!user)return json({error:'กรุณาเข้าสู่ระบบด้วย Jira ก่อน'},401);
+        if(!user.admin)return json({error:'เฉพาะผู้ดูแลเท่านั้น'},403);
+        if(!env.GOOGLE_CHAT_CLIENT_ID||!env.GOOGLE_CHAT_CLIENT_SECRET)return redirect('/?chat=unconfigured');
+        const state=crypto.randomUUID(),verifier=crypto.randomUUID()+crypto.randomUUID();
+        const challenge=btoa(String.fromCharCode(...new Uint8Array(await crypto.subtle.digest('SHA-256',enc.encode(verifier))))).replaceAll('+','-').replaceAll('/','_').replaceAll('=','');
+        const value=b64(JSON.stringify({state,verifier,userId:user.id,exp:Date.now()+600000}));
+        const proof=value+'.'+await hmac('chat-oauth:'+value,env.JIRA_CLIENT_SECRET);
+        const target=new URL('https://accounts.google.com/o/oauth2/v2/auth');
+        target.search=new URLSearchParams({client_id:env.GOOGLE_CHAT_CLIENT_ID,redirect_uri:CHAT_CALLBACK,response_type:'code',scope:CHAT_SCOPE,access_type:'offline',prompt:'consent select_account',state,code_challenge:challenge,code_challenge_method:'S256'}).toString();
+        return redirect(target.toString(),[cookie('tv_chat_oauth',proof,600)]);
+      }
+      if (url.pathname === '/oauth/google-chat/callback') {
+        const finish=status=>redirect('/?chat='+status+'#memberAdmin',[cookie('tv_chat_oauth','',0)]);
+        const user=await session(req,env);
+        if(!user?.admin)return finish('expired');
+        try {
+          const [value,sig]=(cookies(req).tv_chat_oauth||'').split('.');
+          if(!value||!sig||sig!==await hmac('chat-oauth:'+value,env.JIRA_CLIENT_SECRET))return finish('expired');
+          const proof=JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(value.replaceAll('-','+').replaceAll('_','/')),c=>c.charCodeAt(0))));
+          if(proof.exp<=Date.now()||proof.userId!==user.id||!url.searchParams.get('state')||proof.state!==url.searchParams.get('state'))return finish('expired');
+          if(url.searchParams.has('error'))return finish('denied');
+          const code=url.searchParams.get('code');if(!code)return finish('failed');
+          const response=await fetch('https://oauth2.googleapis.com/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({client_id:env.GOOGLE_CHAT_CLIENT_ID,client_secret:env.GOOGLE_CHAT_CLIENT_SECRET,code,code_verifier:proof.verifier,redirect_uri:CHAT_CALLBACK,grant_type:'authorization_code'}),signal:AbortSignal.timeout(15000)});
+          const token=await response.json();
+          if(!response.ok||!token.refresh_token)return finish('failed');
+          // Verify access to the intended room before replacing the working connection.
+          const latest=await fetchChatMembers(env,token.refresh_token);
+          await sheetWrite({action:'saveChatConnection',refreshToken:token.refresh_token},env);
+          await sheetWrite({action:'syncChatMembers',members:latest.members,spaceId:env.GOOGLE_CHAT_SPACE_ID,syncedAt:new Date().toISOString()},env);
+          return finish('connected');
+        }catch{return finish('failed');}
+      }
       if (url.pathname === '/auth/login') {
         if (!env.JIRA_CLIENT_ID || !env.JIRA_CLIENT_SECRET) return authError('ยังไม่ได้ตั้งค่าการเชื่อมต่อ Jira');
         const state = crypto.randomUUID();
