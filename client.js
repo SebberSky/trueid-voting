@@ -27,7 +27,7 @@ function renderActivityState() {
   $('#createActivityBtn').hidden=!user?.admin;
   $('#emptyWaiting').hidden=Boolean(user?.admin);
   $('#emptyLoginHint').hidden=Boolean(user);
-  $('#emptyDescription').textContent=user?.admin?'เริ่มกิจกรรมแรกของทีม กำหนดหัวข้อ วันสิ้นสุด และรางวัลตามอันดับ ใช้รายชื่อผู้ใช้ Client และสมาชิก Chat โดยอัตโนมัติ':'เมื่อผู้ดูแลเปิดกิจกรรม คุณจะสามารถเลือกผู้เข้าชิงและโหวตได้ที่นี่';
+  $('#emptyDescription').textContent=user?.admin?(data?.config.candidateSource==='chat_members_only'?'เริ่มกิจกรรมทดสอบ กำหนดหัวข้อ วันสิ้นสุด และรางวัลตามอันดับ ผู้เข้าชิงใช้เฉพาะสมาชิกห้องแชททดสอบ':'เริ่มกิจกรรมแรกของทีม กำหนดหัวข้อ วันสิ้นสุด และรางวัลตามอันดับ ใช้รายชื่อผู้ใช้ Client และสมาชิก Chat โดยอัตโนมัติ'):'เมื่อผู้ดูแลเปิดกิจกรรม คุณจะสามารถเลือกผู้เข้าชิงและโหวตได้ที่นี่';
   $('#adminFormTitle').textContent=exists?'ตั้งค่ากิจกรรมโหวต':'สร้างกิจกรรมโหวต';
   $('#adminSaveSettings').textContent=exists?'บันทึกการตั้งค่า':'สร้างและเปิดโหวต';
   $('[data-panel="admin"] .section-title').hidden=!exists;
@@ -52,8 +52,11 @@ async function loadData(preserveForm=false) {
   $('.deadline strong').textContent=data.config.endAt ? new Date(data.config.endAt).toLocaleString('th-TH') : 'ยังไม่ได้กำหนด';
   $('#adminTopicInput').value=data.config.topic || '';
   $('#adminEndDateInput').value='';
-  $('#candidateSourceCount').textContent=`ผู้ใช้ Client และสมาชิก Chat · ${data.config.candidateCount||0} คน`;
-  $('#candidateSourceCount').nextElementSibling.textContent='ใช้สมาชิกห้อง Chat ที่ซิงก์แล้วและผู้ใช้ Client จับคู่รายชื่อด้วยอีเมล ไม่ต้องกรอกผู้เข้าชิงเอง';
+  const strict=data.config.candidateSource==='chat_members_only';
+  $('#candidateSourceCount').textContent=`${strict?'สมาชิกห้องแชทเท่านั้น':'ผู้ใช้ Client และสมาชิก Chat'} · ${data.config.candidateCount||0} คน`;
+  $('#candidateSourceCount').nextElementSibling.textContent=strict?'ผู้เข้าชิงตรงกับสมาชิกห้องที่ซิงก์ล่าสุด การล็อกอินนอกห้องไม่เพิ่มผู้เข้าชิง':'ใช้สมาชิกห้อง Chat ที่ซิงก์แล้วและผู้ใช้ Client จับคู่รายชื่อด้วยอีเมล ไม่ต้องกรอกผู้เข้าชิงเอง';
+  $('#environmentBadge').hidden=data.config.environment!=='test';
+  $('#chatSpaceCaption').textContent=data.config.spaceName+' · สำหรับผู้ดูแลเท่านั้น';
   $('#adminAwards').value=(data.config.awards||[]).join('\n');
   if(data.config.endAt){const d=new Date(data.config.endAt);$('#adminEndDateInput').value=new Date(d-d.getTimezoneOffset()*60000).toISOString().slice(0,16);}
   data.candidates.forEach(c=>c.label=c.name+(data.candidates.filter(other=>other.name===c.name).length>1?' · '+c.id.slice(-6):''));
@@ -71,8 +74,9 @@ async function loadChatStatus() {
   if(!user?.admin)return;
   $('#memberAdmin').hidden=false;
   const status=await api('/api/chat/status');
+  $('#chatSpaceCaption').textContent=status.spaceName+' · สำหรับผู้ดูแลเท่านั้น';
   const latest=status.syncedAt?new Date(status.syncedAt).toLocaleString('th-TH',{timeZone:'Asia/Bangkok'}):'ยังไม่เคยซิงก์';
-  $('#chatSyncStatus').textContent=`${status.count} คน · ซิงก์ล่าสุด ${latest}`;
+  $('#chatSyncStatus').textContent=status.needsSync?'ยังไม่ซิงก์สมาชิกห้องที่เลือก':`${status.count} คน · ซิงก์ล่าสุด ${latest}`;
   $('#syncChatMembersBtn').disabled=!status.connected;
   $('#chatMembersSummary').textContent=`รายชื่อสมาชิก ${status.count} คน`;
   $('#chatMemberList').replaceChildren(...(status.members||[]).map(m=>{const li=document.createElement('li'),name=document.createElement('strong'),email=document.createElement('span');name.textContent=m.name;email.textContent=m.email;li.append(name,email);return li;}));

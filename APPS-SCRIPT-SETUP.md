@@ -12,6 +12,12 @@ Each voter must send a stable `voterId` (the Jira account ID). The script reject
 
 ## Google Chat member sync
 
+### Current environment: TEST
+
+Hosted runtime: `VOTING_ENV=test`, `CANDIDATE_SOURCE=chat_members_only`, `GOOGLE_CHAT_SPACE_ID=AAQA0MkG6JM`, `GOOGLE_CHAT_SPACE_NAME=test pr review chat bot`. `GOOGLE_CHAT_WEBHOOK_URL` selects the test room; `GOOGLE_CHAT_PRODUCTION_WEBHOOK_URL` retains the untouched production secret for later use. Neither is embedded in source.
+
+The signed sync persists the environment/source/space in Apps Script properties. Only active synced room members can be candidates, including backend vote validation; outsiders logging into Jira do not create candidates. Old candidate rows and votes remain preserved, inactive outside the selected room. The Worker suppresses old-room counts and candidates until the new-room sync succeeds. This changes the current website's environment, not its URL or public audience, and does not activate reminder triggers.
+
 - The Site Worker reads `tech-cop-trueidapp-mobile` (`AAQASHHP1Y4`) with the read-only `chat.memberships.readonly` scope. Only the app's existing admins can sync or reconnect, and POST requests require the same-origin check.
 - Configure `GOOGLE_CHAT_CLIENT_ID`, `GOOGLE_CHAT_CLIENT_SECRET`, and `GOOGLE_CHAT_REFRESH_TOKEN` as Site secrets. Set `GOOGLE_CHAT_SPACE_ID` and `GOOGLE_CHAT_SPACE_NAME` as runtime variables. Never embed these credentials or the exported roster in public assets.
 - The Worker refreshes access tokens server-side, fetches every membership page, and sends a signed `syncChatMembers` request to Apps Script only after the complete list passes validation.

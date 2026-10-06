@@ -33,6 +33,17 @@ assert.equal(context.chatStatus_().count,1);
 assert.throws(()=>context.syncChatMembers_({spaceId:'AAQASHHP1Y4',members:[roster[0],roster[0]]}));
 assert.throws(()=>context.syncChatMembers_({spaceId:'AAQASHHP1Y4',members:[]}));
 assert.equal(context.chatStatus_().count,1,'Invalid sync preserves roster');
+context.registerClient_({accountId:'outside-client',name:'Outside',email:'outside@muze.co.th'});
+context.syncChatMembers_({spaceId:'AAQA0MkG6JM',environment:'test',candidateSource:'chat_members_only',members:[roster[1]]});
+assert.equal(context.getConfig_().candidateCount,1,'Only selected-room members remain eligible');
+assert.equal(context.getConfig_().environment,'test');assert.equal(context.chatStatus_().chatSpaceId,'AAQA0MkG6JM');
+const countBefore=sheets.get('Candidates').rows.length;
+context.registerClient_({accountId:'another-outsider',name:'No member',email:'new@muze.co.th'});
+assert.equal(sheets.get('Candidates').rows.length,countBefore,'Nonmember login must not append a candidate');
+context.registerClient_({accountId:'outside-client',name:'Outside',email:'outside@muze.co.th'});
+assert.equal(context.getConfig_().candidateCount,1,'Existing nonmember cannot reactivate');
+assert.equal(sheets.get('Votes').rows.length,2,'Environment switch preserves voting history');
+assert.throws(()=>context.syncChatMembers_({spaceId:'AAQASHHP1Y4',environment:'test',members:[roster[1]]}),'Test mode cannot sync the production room');
 
 const env={JIRA_CLIENT_SECRET:'test-secret',GOOGLE_CHAT_CLIENT_ID:'test-client',GOOGLE_CHAT_CLIENT_SECRET:'test-client-secret',GOOGLE_CHAT_REFRESH_TOKEN:'test-refresh',GOOGLE_CHAT_SPACE_ID:'AAQASHHP1Y4'};
 function userCookie(admin=true){const data={id:'test-user',email:'test@muze.co.th',admin,exp:Date.now()+60000};const value=Buffer.from(JSON.stringify(data)).toString('base64url');return 'tv_session='+value+'.'+createHmac('sha256',env.JIRA_CLIENT_SECRET).update('session:'+value).digest('hex');}
@@ -52,6 +63,9 @@ try{
   const result=await (await worker.fetch(request('/api/chat/sync'),env)).json();
   assert.equal(result.count,2);assert.equal(result.pages,2);assert.equal(chatRequests,2);assert.equal(writes.length,1);assert.equal(writes[0].action,'syncChatMembers');
   assert.equal(JSON.stringify(result).includes('test-access'),false);
+  const testEnv={...env,VOTING_ENV:'test',CANDIDATE_SOURCE:'chat_members_only',GOOGLE_CHAT_SPACE_ID:'AAQA0MkG6JM'};
+  writes=[];await worker.fetch(request('/api/chat/sync'),testEnv);
+  assert.equal(writes[0].spaceId,'AAQA0MkG6JM');assert.equal(writes[0].environment,'test');assert.equal(writes[0].candidateSource,'chat_members_only');
   mode='expired';writes=[];assert.equal((await worker.fetch(request('/api/chat/sync'),env)).status,400);assert.equal(writes.length,0);
   mode='page-fails';writes=[];assert.equal((await worker.fetch(request('/api/chat/sync'),env)).status,400);assert.equal(writes.length,0,'Partial pages must not replace roster');
   mode='ok';writes=[];

@@ -4,6 +4,8 @@ const ADMINS = ['chawapon.k@muze.co.th', 'kittisak.bua@truedigital.com'];
 const CHAT_DOMAINS = new Set(['muze.co.th', 'truedigital.com']);
 const CHAT_CALLBACK = ORIGIN+'/oauth/google-chat/callback';
 const CHAT_SCOPE = 'https://www.googleapis.com/auth/chat.memberships.readonly';
+function votingEnvironment(env) {return {environment:env.VOTING_ENV||'production',candidateSource:env.CANDIDATE_SOURCE||'client_and_chat',spaceName:env.GOOGLE_CHAT_SPACE_NAME||'Google Chat'};}
+function syncBody(env,members) {return {action:'syncChatMembers',members,spaceId:env.GOOGLE_CHAT_SPACE_ID,environment:votingEnvironment(env).environment,candidateSource:votingEnvironment(env).candidateSource,syncedAt:new Date().toISOString()};}
 const enc = new TextEncoder();
 const json = (data, status = 200) => Response.json(data, {status, headers: {'Cache-Control':'no-store'}});
 const cookie = (name, value, age) => `${name}=${value}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${age}`;
@@ -107,7 +109,7 @@ export default {
           // Verify access to the intended room before replacing the working connection.
           const latest=await fetchChatMembers(env,token.refresh_token);
           await sheetWrite({action:'saveChatConnection',refreshToken:token.refresh_token},env);
-          await sheetWrite({action:'syncChatMembers',members:latest.members,spaceId:env.GOOGLE_CHAT_SPACE_ID,syncedAt:new Date().toISOString()},env);
+          await sheetWrite(syncBody(env,latest.members),env);
           return finish('connected');
         }catch{return finish('failed');}
       }
@@ -148,7 +150,8 @@ export default {
         const configured=Boolean(env.GOOGLE_CHAT_CLIENT_ID&&env.GOOGLE_CHAT_CLIENT_SECRET&&env.GOOGLE_CHAT_SPACE_ID);
         if(url.pathname==='/api/chat/status'&&req.method==='GET') {
           const status=await sheetWrite({action:'chatStatus'},env);
-          return json({...status,connected:configured&&Boolean(env.GOOGLE_CHAT_REFRESH_TOKEN||status.hasSavedConnection),spaceName:env.GOOGLE_CHAT_SPACE_NAME||'Google Chat'});
+          const mode=votingEnvironment(env),needsSync=status.chatSpaceId!==env.GOOGLE_CHAT_SPACE_ID||status.candidateSource!==mode.candidateSource;
+          return json({...status,...mode,...(needsSync?{count:0,members:[],syncedAt:null}:{}),needsSync,connected:configured&&Boolean(env.GOOGLE_CHAT_REFRESH_TOKEN||status.hasSavedConnection)});
         }
         if(['/api/chat/sync','/api/chat/connect'].includes(url.pathname)&&req.method==='POST') {
           if(req.headers.get('Origin')!==ORIGIN)return json({ok:false,error:'Forbidden'},403);
@@ -160,7 +163,7 @@ export default {
             }
             const latest=await fetchChatMembers(env,replacement);
             if(replacement)await sheetWrite({action:'saveChatConnection',refreshToken:replacement},env);
-            const result=await sheetWrite({action:'syncChatMembers',members:latest.members,spaceId:env.GOOGLE_CHAT_SPACE_ID,syncedAt:new Date().toISOString()},env);
+            const result=await sheetWrite(syncBody(env,latest.members),env);
             return json({...result,pages:latest.pages,skipped:latest.skipped});
           }catch(e){return json({ok:false,error:e.message},400);}
         }
@@ -169,7 +172,8 @@ export default {
       if (url.pathname === '/api/data') {
         const [config, result] = await Promise.all([sheetRead('config'), sheetRead('results')]);
         const rows = (result.results || []).slice(1);
-        return json({config,candidates:config.exists?(config.candidates||[]).filter(c=>c.active).map(c=>({id:c.candidateId,name:c.name})):[],results:config.exists?rows.map(r=>({rank:r[0],id:r[1],name:r[2],votes:r[3],award:r[4]})):[]});
+        const mode=votingEnvironment(env),ready=mode.candidateSource!=='chat_members_only'||(config.chatSpaceId===env.GOOGLE_CHAT_SPACE_ID&&config.candidateSource===mode.candidateSource);
+        return json({config:{...config,...mode,...(!ready?{candidateCount:0}:{}),needsSync:!ready},candidates:config.exists&&ready?(config.candidates||[]).filter(c=>c.active).map(c=>({id:c.candidateId,name:c.name})):[],results:config.exists&&ready?rows.map(r=>({rank:r[0],id:r[1],name:r[2],votes:r[3],award:r[4]})):[]});
       }
       if (url.pathname === '/api/sheet' && req.method === 'POST') {
         if (req.headers.get('Origin') !== ORIGIN) return json({ok:false,error:'Forbidden'},403);

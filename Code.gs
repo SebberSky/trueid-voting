@@ -88,12 +88,17 @@ function saveConfig_(body) {
 }
 
 function getConfig_() {
+  const environment=getVotingEnvironment_();
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEETS.config);
-  if (!sheet) return { exists: false, topic: '', endAt: '', status: 'none', awards: [], candidates: [] };
+  if (!sheet) return { ...environment,exists: false, candidateCount:0,topic: '', endAt: '', status: 'none', awards: [], candidates: [] };
   const config = {}; sheet.getDataRange().getValues().slice(1).forEach(row => config[row[0]] = row[1]);
   const exists = Boolean(config.activityId && config.topic);
   const candidates = getCandidates_();
-  return { exists, candidateCount: candidates.filter(c=>c.active).length, activityId: config.activityId || '', topic: exists ? config.topic : '', endAt: exists ? (config.endAt || '') : '', status: exists ? (config.status || 'closed') : 'none', awards: exists ? JSON.parse(config.awards || '[]') : [], candidates: exists ? candidates : [] };
+  return { ...environment,exists, candidateCount: candidates.filter(c=>c.active).length, activityId: config.activityId || '', topic: exists ? config.topic : '', endAt: exists ? (config.endAt || '') : '', status: exists ? (config.status || 'closed') : 'none', awards: exists ? JSON.parse(config.awards || '[]') : [], candidates: exists ? candidates : [] };
+}
+function getVotingEnvironment_() {
+  const props=PropertiesService.getScriptProperties();
+  return {environment:props.getProperty('VOTING_ENV')||'production',candidateSource:props.getProperty('CANDIDATE_SOURCE')||'client_and_chat',chatSpaceId:props.getProperty('CHAT_SPACE_ID')||''};
 }
 
 function registerClient_(body) {
@@ -106,7 +111,10 @@ function registerClient_(body) {
     const sheet=ss.getSheetByName(SHEETS.candidates),rows=sheet.getDataRange().getValues();
     const index=rows.findIndex((r,i)=>i>0&&(String(r[0])===id||(email&&String(r[4]).toLowerCase()===email)));
     const safeName=/^[=+@-]/.test(name)?"'"+name:name;
-    if(index<0)sheet.appendRow([id,safeName,'','TRUE',email,'','client']);
+    if(index<0){
+      if(getVotingEnvironment_().candidateSource==='chat_members_only')return {ok:true,candidateEligible:false};
+      sheet.appendRow([id,safeName,'','TRUE',email,'','client']);
+    }
     else {
       // Keep the canonical candidate ID and chat-managed active status across Jira logins.
       if(String(rows[index][6])!=='chat')sheet.getRange(index+1,2).setValue(safeName);
@@ -122,7 +130,11 @@ function ensureCandidates_(ss) {
 }
 
 function syncChatMembers_(body) {
-  if(body.spaceId!=='AAQASHHP1Y4')throw Error('Unexpected Chat space');
+  const environment=body.environment||'production';
+  const spaces={production:'AAQASHHP1Y4',test:'AAQA0MkG6JM'};
+  if(!spaces[environment]||body.spaceId!==spaces[environment])throw Error('Unexpected Chat space');
+  const candidateSource=environment==='test'?'chat_members_only':body.candidateSource||'client_and_chat';
+  if(!['chat_members_only','client_and_chat'].includes(candidateSource))throw Error('Invalid candidate source');
   if(!Array.isArray(body.members)||!body.members.length||body.members.length>10000)throw Error('Invalid member list');
   const seenIds={},seenEmails={};
   const members=body.members.map(m=>{
@@ -148,12 +160,13 @@ function syncChatMembers_(body) {
       else {const row=candidates[index];row[1]=safeSheetText_(m.name);row[3]='TRUE';row[4]=m.email;row[5]=m.chatUserId;row[6]='chat';}
     });
     let inactive=0;
-    candidates.forEach(r=>{if(r[6]==='chat'&&!seenIds[String(r[5])]){r[3]='FALSE';inactive++;}});
+    candidates.forEach(r=>{if((candidateSource==='chat_members_only'||r[6]==='chat')&&!seenIds[String(r[5])]){r[3]='FALSE';inactive++;}});
     // Never delete candidate IDs or vote history when people leave the Chat space.
     chatSheet.getRange(1,1,chatRows.length+1,5).setValues([['email','name','chatUserId','active','syncedAt'],...chatRows]);
     candidateSheet.getRange(1,1,candidates.length+1,7).setValues([CANDIDATE_HEADERS,...candidates]);
     const properties=PropertiesService.getScriptProperties();
     properties.setProperty('CHAT_LAST_SYNC_AT',syncedAt);properties.setProperty('CHAT_SPACE_ID',body.spaceId);
+    properties.setProperty('VOTING_ENV',environment);properties.setProperty('CANDIDATE_SOURCE',candidateSource);
     refreshResults_();
     return {ok:true,count:members.length,added,inactive,syncedAt};
   } finally {lock.releaseLock();}
@@ -163,14 +176,17 @@ function chatStatus_() {
   const sheet=SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEETS.chatMembers);
   const members=sheet?sheet.getDataRange().getValues().slice(1).filter(r=>r[2]&&String(r[3]).toUpperCase()!=='FALSE').map(r=>({email:String(r[0]),name:String(r[1]),chatUserId:String(r[2])})):[];
   const properties=PropertiesService.getScriptProperties();
-  return {ok:true,count:members.length,syncedAt:properties.getProperty('CHAT_LAST_SYNC_AT')||null,hasSavedConnection:Boolean(properties.getProperty('GOOGLE_CHAT_REFRESH_TOKEN')),members};
+  return {ok:true,...getVotingEnvironment_(),count:members.length,syncedAt:properties.getProperty('CHAT_LAST_SYNC_AT')||null,hasSavedConnection:Boolean(properties.getProperty('GOOGLE_CHAT_REFRESH_TOKEN')),members};
 }
 function safeSheetText_(value) {return /^[=+@-]/.test(value)?"'"+value:value;}
 
 function getCandidates_() {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEETS.candidates);
   if (!sheet) return [];
-  return sheet.getDataRange().getValues().slice(1).filter(r => r[0]).map(r => ({ candidateId: String(r[0]), name: String(r[1]), team: String(r[2]), active: String(r[3]).toUpperCase() !== 'FALSE' }));
+  const strict=getVotingEnvironment_().candidateSource==='chat_members_only';
+  const chat=SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEETS.chatMembers);
+  const eligible=new Set(chat?chat.getDataRange().getValues().slice(1).filter(r=>r[2]&&String(r[3]).toUpperCase()!=='FALSE').map(r=>String(r[2])):[]);
+  return sheet.getDataRange().getValues().slice(1).filter(r => r[0]).map(r => ({ candidateId: String(r[0]), name: String(r[1]), team: String(r[2]), active: String(r[3]).toUpperCase() !== 'FALSE'&&(!strict||eligible.has(String(r[5]))) }));
 }
 
 function refreshResults_() {
