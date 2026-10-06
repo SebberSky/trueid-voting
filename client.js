@@ -27,7 +27,7 @@ function renderActivityState() {
   $('#createActivityBtn').hidden=!user?.admin;
   $('#emptyWaiting').hidden=Boolean(user?.admin);
   $('#emptyLoginHint').hidden=Boolean(user);
-  $('#emptyDescription').textContent=user?.admin?'เริ่มกิจกรรมแรกของทีม กำหนดหัวข้อ วันสิ้นสุด และรางวัลตามอันดับ รายชื่อผู้เข้าชิงมาจากผู้ใช้ Client ทั้งหมดโดยอัตโนมัติ':'เมื่อผู้ดูแลเปิดกิจกรรม คุณจะสามารถเลือกผู้เข้าชิงและโหวตได้ที่นี่';
+  $('#emptyDescription').textContent=user?.admin?'เริ่มกิจกรรมแรกของทีม กำหนดหัวข้อ วันสิ้นสุด และรางวัลตามอันดับ ใช้รายชื่อผู้ใช้ Client และสมาชิก Chat โดยอัตโนมัติ':'เมื่อผู้ดูแลเปิดกิจกรรม คุณจะสามารถเลือกผู้เข้าชิงและโหวตได้ที่นี่';
   $('#adminFormTitle').textContent=exists?'ตั้งค่ากิจกรรมโหวต':'สร้างกิจกรรมโหวต';
   $('#adminSaveSettings').textContent=exists?'บันทึกการตั้งค่า':'สร้างและเปิดโหวต';
   $('[data-panel="admin"] .section-title').hidden=!exists;
@@ -41,7 +41,9 @@ $('#cancel').onclick=()=>$('#modal').classList.remove('open');
 document.querySelectorAll('[data-mode]').forEach(b=>b.onclick=()=>showMode(b.dataset.mode));
 $('[data-mode="admin"]').hidden=true;
 $('#searchVoteBtn').disabled=true;
-async function loadData() {
+async function loadData(preserveForm=false) {
+  const draft=preserveForm?[$('#adminTopicInput').value,$('#adminEndDateInput').value,$('#adminAwards').value]:null;
+  const wasCreating=preserveForm&&!data?.config.exists&&!$('[data-panel="admin"]').hidden;
   data = await api('/api/data');
   $('#loadingState').hidden=true;
   renderActivityState();
@@ -50,7 +52,8 @@ async function loadData() {
   $('.deadline strong').textContent=data.config.endAt ? new Date(data.config.endAt).toLocaleString('th-TH') : 'ยังไม่ได้กำหนด';
   $('#adminTopicInput').value=data.config.topic || '';
   $('#adminEndDateInput').value='';
-  $('#candidateSourceCount').textContent=`ผู้ใช้ Client ทั้งหมด · ${data.config.candidateCount||0} คน`;
+  $('#candidateSourceCount').textContent=`ผู้ใช้ Client และสมาชิก Chat · ${data.config.candidateCount||0} คน`;
+  $('#candidateSourceCount').nextElementSibling.textContent='ใช้สมาชิกห้อง Chat ที่ซิงก์แล้วและผู้ใช้ Client จับคู่รายชื่อด้วยอีเมล ไม่ต้องกรอกผู้เข้าชิงเอง';
   $('#adminAwards').value=(data.config.awards||[]).join('\n');
   if(data.config.endAt){const d=new Date(data.config.endAt);$('#adminEndDateInput').value=new Date(d-d.getTimezoneOffset()*60000).toISOString().slice(0,16);}
   data.candidates.forEach(c=>c.label=c.name+(data.candidates.filter(other=>other.name===c.name).length>1?' · '+c.id.slice(-6):''));
@@ -61,7 +64,41 @@ async function loadData() {
   data.results.filter(r=>r.award).forEach(r=>{const item=document.createElement('article');item.className='award';const rank=document.createElement('span');rank.className='rank';rank.textContent='อันดับ '+r.rank;const title=document.createElement('h3');title.textContent=r.award;item.append(rank,title);awards.append(item);});
   const results=$('#realResults'); results.replaceChildren();
   data.results.forEach(r=>{const p=document.createElement('p');p.textContent=`${r.rank}. ${r.name} — ${r.votes} คะแนน${r.award ? ' · '+r.award : ''}`;results.append(p);});
+  if(draft){$('#adminTopicInput').value=draft[0];$('#adminEndDateInput').value=draft[1];$('#adminAwards').value=draft[2];}
+  if(wasCreating){$('#emptyState').hidden=true;$('[data-panel="admin"]').hidden=false;showMode('admin');}
 }
+async function loadChatStatus() {
+  if(!user?.admin)return;
+  $('#memberAdmin').hidden=false;
+  const status=await api('/api/chat/status');
+  const latest=status.syncedAt?new Date(status.syncedAt).toLocaleString('th-TH',{timeZone:'Asia/Bangkok'}):'ยังไม่เคยซิงก์';
+  $('#chatSyncStatus').textContent=`${status.count} คน · ซิงก์ล่าสุด ${latest}`;
+  $('#syncChatMembersBtn').disabled=!status.connected;
+  $('#chatMembersSummary').textContent=`รายชื่อสมาชิก ${status.count} คน`;
+  $('#chatMemberList').replaceChildren(...(status.members||[]).map(m=>{const li=document.createElement('li'),name=document.createElement('strong'),email=document.createElement('span');name.textContent=m.name;email.textContent=m.email;li.append(name,email);return li;}));
+  if(!status.connected){$('#chatSyncError').hidden=false;$('#chatSyncError').textContent='ยังไม่ได้ตั้งค่าการเชื่อมต่อ Google Chat';}
+}
+$('#syncChatMembersBtn').onclick=async()=>{
+  if(!user?.admin)return;
+  const button=$('#syncChatMembersBtn');button.disabled=true;button.textContent='กำลังซิงก์สมาชิก…';$('#chatSyncError').hidden=true;
+  try {
+    const result=await api('/api/chat/sync',{});
+    await loadChatStatus();await loadData(true);
+    message(`ซิงก์สมาชิก ${result.count} คนแล้ว · เพิ่ม ${result.added} คน`);
+  }catch(e){$('#chatSyncError').textContent=e.message;$('#chatSyncError').hidden=false;}
+  finally{button.disabled=false;button.textContent='ซิงก์สมาชิกจาก Chat';}
+};
+$('#reconnectChatBtn').onclick=async()=>{
+  if(!user?.admin)return;
+  const field=$('#chatRefreshToken'),button=$('#reconnectChatBtn'),refreshToken=field.value.trim();
+  if(!refreshToken){message('กรุณาระบุ Refresh token ใหม่');return;}
+  button.disabled=true;$('#syncChatMembersBtn').disabled=true;$('#chatSyncError').hidden=true;
+  try {
+    const result=await api('/api/chat/connect',{refreshToken});field.value='';
+    await loadChatStatus();await loadData(true);message(`เชื่อมต่อและซิงก์สมาชิก ${result.count} คนแล้ว`);
+  }catch(e){field.value='';$('#chatSyncError').textContent=e.message;$('#chatSyncError').hidden=false;}
+  finally{button.disabled=false;$('#syncChatMembersBtn').disabled=false;}
+};
 $('#candidateSearch').addEventListener('focus',async()=>{
   if(!data?.config.exists)return;
   try {
@@ -92,4 +129,5 @@ $('#adminSaveSettings').onclick=async()=>{
   try{const result=await api('/api/session');user=result.user;if(user){$('#loginBtn').textContent=user.name+' · ออกจากระบบ';$('#loginBtn').onclick=()=>{const form=document.createElement('form');form.method='POST';form.action='/auth/logout';document.body.append(form);form.submit();};$('.landing').hidden=true;$('[data-mode="admin"]').hidden=!user.admin;$('#loginStatus').textContent='เข้าสู่ระบบแล้ว: '+user.name;}}
   catch(e){message(e.message);}
   try{await loadData();}catch(e){$('#loadingState').hidden=true;$('#emptyState').hidden=false;$('#emptyState h1').textContent='โหลดข้อมูลไม่สำเร็จ';$('#emptyDescription').textContent='กรุณารีเฟรชหน้าเว็บเพื่อลองอีกครั้ง';$('#emptyWaiting').hidden=true;message(e.message);}
+  if(user?.admin)try{await loadChatStatus();}catch(e){$('#memberAdmin').hidden=false;$('#chatSyncError').hidden=false;$('#chatSyncError').textContent=e.message;}
 })();

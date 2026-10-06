@@ -1,6 +1,7 @@
 const ORIGIN = 'https://trueid-voting.chawapon-rr.chatgpt.site';
 const SHEET = 'https://script.google.com/macros/s/AKfycbxOSQQdiI2e07sRRkQ7mltkTadgF4gwVMxgwpzfGyZJ33P8MzDwWw21c4Nv8ZSgl_Yi/exec';
 const ADMINS = ['chawapon.k@muze.co.th', 'kittisak.bua@truedigital.com'];
+const CHAT_DOMAINS = new Set(['muze.co.th', 'truedigital.com']);
 const enc = new TextEncoder();
 const json = (data, status = 200) => Response.json(data, {status, headers: {'Cache-Control':'no-store'}});
 const cookie = (name, value, age) => `${name}=${value}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${age}`;
@@ -35,6 +36,41 @@ async function sheetWrite(body,env) {
   if(result.ok===false)throw Error(result.error||'บันทึกข้อมูลไม่สำเร็จ');
   return result;
 }
+async function fetchChatMembers(env, replacementRefreshToken) {
+  const stored=replacementRefreshToken?null:await sheetWrite({action:'getChatConnection'},env);
+  const refreshToken=replacementRefreshToken||stored?.refreshToken||env.GOOGLE_CHAT_REFRESH_TOKEN;
+  if (!env.GOOGLE_CHAT_CLIENT_ID || !env.GOOGLE_CHAT_CLIENT_SECRET || !refreshToken || !env.GOOGLE_CHAT_SPACE_ID) throw Error('ยังไม่ได้เชื่อมต่อ Google Chat');
+  const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+    method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'},
+    body:new URLSearchParams({client_id:env.GOOGLE_CHAT_CLIENT_ID,client_secret:env.GOOGLE_CHAT_CLIENT_SECRET,refresh_token:refreshToken,grant_type:'refresh_token'}),
+    signal:AbortSignal.timeout(15000)
+  });
+  const token = await tokenResponse.json();
+  if (!tokenResponse.ok || !token.access_token) throw Error(token.error==='invalid_grant' ? 'สิทธิ์ Google Chat หมดอายุหรือถูกถอน กรุณาเชื่อมต่อบัญชีผู้ดูแลใหม่' : 'Google ไม่อนุญาตให้ต่ออายุการเชื่อมต่อ Chat');
+  const members = [], seenPages = new Set(), seenIds = new Set(), seenEmails = new Set();
+  let pageToken = '', pages = 0, skipped = 0;
+  do {
+    const target = new URL('https://chat.googleapis.com/v1/spaces/'+encodeURIComponent(env.GOOGLE_CHAT_SPACE_ID)+'/members');
+    target.searchParams.set('pageSize','1000');target.searchParams.set('filter','member.type = "HUMAN"');
+    if(pageToken)target.searchParams.set('pageToken',pageToken);
+    const response = await fetch(target,{headers:{Authorization:'Bearer '+token.access_token},signal:AbortSignal.timeout(15000)});
+    const result = await response.json();
+    if (!response.ok) throw Error(response.status===403 ? 'บัญชีที่เชื่อมต่อไม่มีสิทธิ์อ่านสมาชิกห้อง Chat หรือถูกนโยบายองค์กรบล็อก' : 'อ่านสมาชิก Google Chat ไม่สำเร็จ ('+response.status+')');
+    for (const membership of result.memberships || []) {
+      if(membership.state!=='JOINED'||membership.member?.type!=='HUMAN')continue;
+      const member=membership.member,email=String(member.email||'').trim().toLowerCase();
+      if(!CHAT_DOMAINS.has(email.split('@')[1])||!/^users\/\d+$/.test(member.name||'')){skipped++;continue;}
+      if(seenIds.has(member.name))continue;
+      if(seenEmails.has(email))throw Error('พบอีเมลซ้ำในรายชื่อสมาชิก จึงยังไม่เปลี่ยนข้อมูลเดิม');
+      seenIds.add(member.name);seenEmails.add(email);members.push({email,name:String(member.displayName||email),chatUserId:member.name});
+    }
+    pages++;pageToken=result.nextPageToken||'';
+    if(pageToken&&(seenPages.has(pageToken)||pages>=100))throw Error('ดึงสมาชิกไม่ครบทุกหน้า จึงยังไม่เปลี่ยนข้อมูลเดิม');
+    seenPages.add(pageToken);
+  } while(pageToken);
+  if(!members.length)throw Error('ไม่พบสมาชิกที่ใช้ได้ จึงเก็บรายชื่อเดิมไว้');
+  return {members,pages,skipped};
+}
 export default {
   async fetch(req, env) {
     const url = new URL(req.url);
@@ -57,7 +93,7 @@ export default {
         if (!profileResponse.ok || !profile.account_id) return authError('อ่านข้อมูลบัญชี Jira ไม่สำเร็จ ('+profileResponse.status+')');
         const email = String(profile.email || '').toLowerCase();
         const user = {id:profile.account_id,email,name:profile.name || email,admin:ADMINS.includes(email),exp:Date.now()+8*3600000};
-        await sheetWrite({action:'registerClient',accountId:user.id,name:user.name},env);
+        await sheetWrite({action:'registerClient',accountId:user.id,name:user.name,email:user.email},env);
         return redirect('/#vote',[cookie('tv_session',await sign(user,env),8*3600),cookie('tv_oauth_state','',0)]);
       }
       if (url.pathname === '/auth/logout' && req.method === 'POST') {
@@ -66,8 +102,33 @@ export default {
       }
       if (url.pathname === '/api/session') {
         const user=await session(req,env);
-        if(user)await sheetWrite({action:'registerClient',accountId:user.id,name:user.name},env);
+        if(user)await sheetWrite({action:'registerClient',accountId:user.id,name:user.name,email:user.email},env);
         return json({user});
+      }
+      if (['/api/chat/status','/api/chat/sync','/api/chat/connect'].includes(url.pathname)) {
+        const user=await session(req,env);
+        if(!user)return json({ok:false,error:'กรุณาเข้าสู่ระบบก่อน'},401);
+        if(!user.admin)return json({ok:false,error:'เฉพาะผู้ดูแลเท่านั้น'},403);
+        const configured=Boolean(env.GOOGLE_CHAT_CLIENT_ID&&env.GOOGLE_CHAT_CLIENT_SECRET&&env.GOOGLE_CHAT_SPACE_ID);
+        if(url.pathname==='/api/chat/status'&&req.method==='GET') {
+          const status=await sheetWrite({action:'chatStatus'},env);
+          return json({...status,connected:configured&&Boolean(env.GOOGLE_CHAT_REFRESH_TOKEN||status.hasSavedConnection),spaceName:env.GOOGLE_CHAT_SPACE_NAME||'Google Chat'});
+        }
+        if(['/api/chat/sync','/api/chat/connect'].includes(url.pathname)&&req.method==='POST') {
+          if(req.headers.get('Origin')!==ORIGIN)return json({ok:false,error:'Forbidden'},403);
+          try {
+            let replacement;
+            if(url.pathname==='/api/chat/connect'){
+              const body=await req.json();replacement=String(body.refreshToken||'').trim();
+              if(replacement.length<20||replacement.length>4096)throw Error('กรุณาระบุ Refresh token ที่ถูกต้อง');
+            }
+            const latest=await fetchChatMembers(env,replacement);
+            if(replacement)await sheetWrite({action:'saveChatConnection',refreshToken:replacement},env);
+            const result=await sheetWrite({action:'syncChatMembers',members:latest.members,spaceId:env.GOOGLE_CHAT_SPACE_ID,syncedAt:new Date().toISOString()},env);
+            return json({...result,pages:latest.pages,skipped:latest.skipped});
+          }catch(e){return json({ok:false,error:e.message},400);}
+        }
+        return json({ok:false,error:'Method not allowed'},405);
       }
       if (url.pathname === '/api/data') {
         const [config, result] = await Promise.all([sheetRead('config'), sheetRead('results')]);
