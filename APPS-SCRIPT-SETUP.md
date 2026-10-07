@@ -31,7 +31,7 @@ Each voter must send a stable `voterId` (the Jira account ID). The script reject
 
 - Dates display `dd MMMM yyyy · HH:mm` using Thai full month names, Gregorian years and Asia/Bangkok (UTC+07:00), without seconds or AM/PM. Admin date/hour/minute controls round-trip independently of the browser's timezone.
 - Copy link uses the canonical site's `/#vote` URL and offers a selected readonly text field when clipboard permission is unavailable.
-- `/api/announcement` is POST-only, admin-only and exact same-origin. It reads the real open activity, validates the selected environment/room/webhook, then sends only on a manual click. The message includes topic, deadline and voting URL; no automatic user or all-room mention is inserted.
+- `/api/announcement` is POST-only, admin-only and exact same-origin. It reads the real open activity, validates the selected environment/room/webhook, then sends only on a manual click. The message includes topic, deadline, voting URL and exactly one `<users/all>` mention. It does not send automatically or insert individual mentions.
 - `claimAnnouncement` and `finishAnnouncement` are HMAC-protected Apps Script actions. A ScriptLock and persisted fingerprint prevent concurrent/repeated announcements for unchanged activity settings. Ambiguous delivery stays blocked for manual room verification, even after a settings change; there is no automatic network retry. A valid room-specific message receipt is required before marking sent. Credentials never enter browser responses or the stored status.
 - Deploy updated Code.gs before the matching Worker build. `node test-announcement.mjs` tests formats/controls and sending with fully mocked transport: no live webhook is called.
 

@@ -53,7 +53,7 @@ function request(path,actor,body,source=origin){return new Request(origin+path,{
 const savedFetch=globalThis.fetch;let messages=0;
 globalThis.fetch=async(url,options)=>{
   if(String(url).startsWith('https://script.google.com/')){const result=context.doPost({postData:{contents:options.body}});return Response.json(JSON.parse(result.value));}
-  if(String(url).startsWith('https://chat.googleapis.com/')){messages++;assert.ok(String(url).includes('AAQA0MkG6JM'));const text=JSON.parse(options.body).text;assert.ok(text.includes('?activity='));assert.ok(!text.includes('<users/'));return Response.json({name:'spaces/AAQA0MkG6JM/messages/mock'});}
+  if(String(url).startsWith('https://chat.googleapis.com/')){messages++;assert.ok(String(url).includes('AAQA0MkG6JM'));const text=JSON.parse(options.body).text;assert.ok(text.includes('?activity='));assert.equal((text.match(/<users\/all>/g)||[]).length,1);return Response.json({name:'spaces/AAQA0MkG6JM/messages/mock'});}
   throw Error('Unexpected real transport');
 };
 try{

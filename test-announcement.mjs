@@ -11,6 +11,10 @@ const scope=vm.createContext({document,Intl,Date,Map,Array,Number,Promise});
 vm.runInContext(client.slice(0,client.indexOf('function message(')),scope);
 assert.equal(scope.formatVotingDate('2026-10-06T12:00:00Z'),'06 ตุลาคม 2026 · 19:00 น.');
 assert.equal(scope.formatVotingDate('2026-10-05T17:00:00Z'),'06 ตุลาคม 2026 · 00:00 น.');
+assert.equal(scope.rankLabel({votes:0,rank:3}),'ไม่มีอันดับ');
+assert.equal(scope.rankLabel({votes:0,rank:1}),'ไม่มีอันดับ');
+assert.equal(scope.rankLabel({votes:3,rank:1}),'1');
+assert.equal(scope.rankLabel({votes:1,rank:2}),'2');
 scope.setDeadlineFields('2026-10-06T12:00:00Z');assert.equal(elements.get('#adminEndDateInput').value,'2026-10-06');assert.equal(elements.get('#adminEndHour').value,'19');assert.equal(elements.get('#adminEndMinute').value,'00');
 assert.equal(elements.get('#adminEndHour').children.length,24);assert.equal(elements.get('#adminEndMinute').children.length,60);
 assert.equal(new Date(`${elements.get('#adminEndDateInput').value}T19:00:00+07:00`).toISOString(),'2026-10-06T12:00:00.000Z');
@@ -32,7 +36,7 @@ globalThis.fetch=async(input,options)=>{
     return Response.json({ok:true});
   }
   assert.equal(url,env.GOOGLE_CHAT_WEBHOOK_URL,'Only selected-room webhook is used');
-  sent++;const message=JSON.parse(options.body);assert.ok(message.text.includes(origin+'/?activity=activity-1#vote'));assert.ok(message.text.includes('06 ตุลาคม 2030 · 19:00'));assert.ok(!message.text.includes('<users/'),'Announcement never adds user mentions');
+  sent++;const message=JSON.parse(options.body);assert.ok(message.text.includes(origin+'/?activity=activity-1#vote'));assert.ok(message.text.includes('06 ตุลาคม 2030 · 19:00'));assert.equal((message.text.match(/<users\/all>/g)||[]).length,1,'Exactly one deliberate @all, even if topic contains mention markup');assert.ok(!/<users\/(?!all>)/.test(message.text),'No individual mentions');
   if(mode==='timeout')throw Error('mock transport timeout');
   if(mode==='bad-receipt')return Response.json({name:'spaces/WRONG/messages/mock'});
   return Response.json({name:'spaces/AAQA0MkG6JM/messages/mock'});
@@ -48,4 +52,4 @@ try{
   const count=sent;assert.equal((await worker.fetch(request(),{...env,GOOGLE_CHAT_SPACE_ID:'AAQASHHP1Y4'})).status,400);assert.equal(sent,count,'Environment mismatch cannot send');
   config={...config,status:'closed'};assert.equal((await worker.fetch(request(),env)).status,400);assert.equal(sent,count);
 }finally{globalThis.fetch=original;}
-console.log('PASS: full-month Gregorian dates, 24-hour Bangkok time, date round-trip, announcement auth/CSRF, correct-room guard, no mentions, deduplication and ambiguous receipts; all transport mocked.');
+console.log('PASS: zero-score unranked display, full-month Gregorian dates, 24-hour Bangkok time, date round-trip, announcement auth/CSRF, correct-room guard, one @all mention, deduplication and ambiguous receipts; all transport mocked.');

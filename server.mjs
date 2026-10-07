@@ -196,7 +196,7 @@ export default {
         if(claim.alreadySent)return json({ok:true,alreadySent:true});
         const finish=state=>sheetWrite({action:'finishAnnouncement',activityId:config.activityId,requestId,...state},env);
         const topic=String(config.topic).slice(0,200).replace(/[<>]/g,'');
-        const text=`TrueID Voting — เปิดโหวต\n${topic}\nทุกบัญชีโหวตได้ครั้งเดียวต่อกิจกรรม\nสิ้นสุด ${announcementDeadline(config.endAt)} (เวลาไทย)\n${ORIGIN}/?activity=${encodeURIComponent(config.activityId)}#vote`;
+        const text=`<users/all>\nTrueID Voting — เปิดโหวต\n${topic}\nทุกบัญชีโหวตได้ครั้งเดียวต่อกิจกรรม\nสิ้นสุด ${announcementDeadline(config.endAt)} (เวลาไทย)\n${ORIGIN}/?activity=${encodeURIComponent(config.activityId)}#vote`;
         let response;
         try{response=await fetch(target,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text}),signal:AbortSignal.timeout(15000)});}
         catch{await finish({status:'unknown'});return json({error:'ยังยืนยันการส่งไม่ได้ กรุณาตรวจในห้องแชทก่อน ไม่ส่งซ้ำอัตโนมัติ'},502);}

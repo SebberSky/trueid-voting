@@ -13,6 +13,7 @@ for(const [id,size] of [['adminEndHour',24],['adminEndMinute',60]]){
   $('#'+id).replaceChildren(...Array.from({length:size},(_,i)=>{const o=document.createElement('option');o.value=String(i).padStart(2,'0');o.textContent=o.value;return o;}));
 }
 setDeadlineFields('');
+function rankLabel(result){return result.votes>0?String(result.rank):'ไม่มีอันดับ';}
 function message(text){clearTimeout(toastTimer);$('#toast').textContent=text;$('#toast').hidden=false;toastTimer=setTimeout(()=>$('#toast').hidden=true,5000);}
 function error(text){$('#pageError').textContent=text;$('#pageError').hidden=false;}
 function el(tag,text,className){const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(className)e.className=className;return e;}
@@ -100,7 +101,7 @@ function renderDetail(){
   $('#voteMessage').textContent=a.myVote?'คุณโหวตให้ '+a.myVote.name+' · '+formatVotingDate(a.myVote.votedAt)+' · เปลี่ยนโหวตไม่ได้':closed?reasons.closed:reasons[a.voteBlockedReason]||'พิมพ์ชื่อเพื่อค้นหา · ห้ามโหวตตัวเอง · โหวตได้ครั้งเดียว';
   $('#candidateList').replaceChildren(...a.candidates.filter(c=>!c.isSelf).map(c=>{const option=el('option');option.value=c.name+' · '+c.id.slice(-6);return option;}));
   $('#candidateSearch').value='';$('#submitVote').disabled=!a.canVote;
-  $('#rankingRows').replaceChildren(...a.results.map(r=>{const row=el('div',undefined,'rank-row');row.append(el('span',String(r.rank),'rank'),el('span',r.name+(r.isSelf?' (คุณ)':''),'name'),el('span',String(r.votes),'score'),el('span',r.award?(r.tied?'อันดับร่วม · ':'')+r.award:r.votes?'ไม่มีรางวัลในอันดับนี้':'ยังไม่มีคะแนน','award'));return row;}));
+  $('#rankingRows').replaceChildren(...a.results.map(r=>{const row=el('div',undefined,'rank-row');row.append(el('span',rankLabel(r),r.votes>0?'rank':'rank unranked'),el('span',r.name+(r.isSelf?' (คุณ)':''),'name'),el('span',String(r.votes),'score'),el('span',r.award?(r.tied?'อันดับร่วม · ':'')+r.award:r.votes?'ไม่มีรางวัลในอันดับนี้':'ยังไม่มีคะแนน','award'));return row;}));
   $('#awardList').replaceChildren(...a.awards.map(x=>el('li',x)));
   clearTimeout(closeTimer);
   if(!closed){const delay=Math.max(1000,Math.min(Date.parse(a.endAt)-Date.now()+500,2147483000));closeTimer=setTimeout(()=>loadData().catch(e=>error(e.message)),delay);}
@@ -152,7 +153,7 @@ $('#copyVoteLinkBtn').onclick=async()=>{
   catch{$('#voteShareLink').value=link;$('#voteShareLink').hidden=false;$('#voteShareLink').focus();$('#voteShareLink').select();message('เลือกข้อความแล้ว กดคัดลอกได้เลย');}
 };
 $('#announceVoteBtn').onclick=()=>busy($('#announceVoteBtn'),async()=>{
-  if(!await confirmAction('ประกาศโหวตเข้าห้องแชท',`ส่งหัวข้อและลิงก์กิจกรรม “${selected.topic}” ไปยัง ${data.spaceName}`))return;
+  if(!await confirmAction('ประกาศโหวตเข้าห้องแชท',`ส่งหัวข้อและลิงก์กิจกรรม “${selected.topic}” ไปยัง ${data.spaceName} พร้อมแท็ก @all ทุกคนในห้อง`))return;
   $('#announcementError').hidden=true;
   try{const r=await api('/api/announcement',{activityId:selected.id});message(r.alreadySent?'กิจกรรมนี้ประกาศแล้ว ไม่ส่งซ้ำ':'ประกาศโหวตแล้ว');}
   catch(e){$('#announcementError').textContent=e.message;$('#announcementError').hidden=false;}
