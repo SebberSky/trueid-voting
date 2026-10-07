@@ -97,10 +97,10 @@ function renderDetail(){
   $('#votePanel').classList.toggle('locked',Boolean(a.myVote));
   const reasons={login:'เข้าสู่ระบบเพื่อดูสิทธิ์และโหวต',admin:'แอดมินและ Subadmin ไม่มีสิทธิ์โหวต',closed:'กิจกรรมนี้ปิดโหวตแล้ว',ineligible:'บัญชีนี้ไม่อยู่ในรายชื่อผู้มีสิทธิ์ตอนสร้างกิจกรรม'};
   $('#voteHeading').textContent=a.myVote?'โหวตของคุณถูกบันทึกแล้ว':closed?'การโหวตสิ้นสุดแล้ว':'เลือกคนที่คุณต้องการโหวต';
-  $('#voteMessage').textContent=a.myVote?'คุณโหวตให้ '+a.myVote.name+' · '+formatVotingDate(a.myVote.votedAt)+' · เปลี่ยนโหวตไม่ได้':reasons[a.voteBlockedReason]||'พิมพ์ชื่อเพื่อค้นหา · ห้ามโหวตตัวเอง · โหวตได้ครั้งเดียว';
+  $('#voteMessage').textContent=a.myVote?'คุณโหวตให้ '+a.myVote.name+' · '+formatVotingDate(a.myVote.votedAt)+' · เปลี่ยนโหวตไม่ได้':closed?reasons.closed:reasons[a.voteBlockedReason]||'พิมพ์ชื่อเพื่อค้นหา · ห้ามโหวตตัวเอง · โหวตได้ครั้งเดียว';
   $('#candidateList').replaceChildren(...a.candidates.filter(c=>!c.isSelf).map(c=>{const option=el('option');option.value=c.name+' · '+c.id.slice(-6);return option;}));
   $('#candidateSearch').value='';$('#submitVote').disabled=!a.canVote;
-  $('#rankingRows').replaceChildren(...a.results.map(r=>{const row=el('div',undefined,'rank-row');row.append(el('span',r.votes?r.rank:'–','rank'),el('span',r.name+(r.isSelf?' (คุณ)':''),'name'),el('span',String(r.votes),'score'),el('span',r.award?(r.tied?'อันดับร่วม · ':'')+r.award:'ยังไม่มีรางวัลผู้ชนะ','award'));return row;}));
+  $('#rankingRows').replaceChildren(...a.results.map(r=>{const row=el('div',undefined,'rank-row');row.append(el('span',String(r.rank),'rank'),el('span',r.name+(r.isSelf?' (คุณ)':''),'name'),el('span',String(r.votes),'score'),el('span',r.award?(r.tied?'อันดับร่วม · ':'')+r.award:r.votes?'ไม่มีรางวัลในอันดับนี้':'ยังไม่มีคะแนน','award'));return row;}));
   $('#awardList').replaceChildren(...a.awards.map(x=>el('li',x)));
   clearTimeout(closeTimer);
   if(!closed){const delay=Math.max(1000,Math.min(Date.parse(a.endAt)-Date.now()+500,2147483000));closeTimer=setTimeout(()=>loadData().catch(e=>error(e.message)),delay);}
