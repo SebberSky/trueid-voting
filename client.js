@@ -151,7 +151,7 @@ function openForm(activity){
 function renderReminderFields(){
   const enabled=$('#enableActivityReminders').checked;
   $('#reminderIntervalFields').hidden=!enabled;$('#reminderEvery').disabled=!enabled;$('#reminderUnit').disabled=!enabled;
-  $('#adminReminderHint').textContent=data.reminderEngine?.enabled?'รอบแรกหลังบันทึกหรือเริ่มโหวตครบช่วงที่ตั้ง · แท็กเฉพาะคนที่ยังไม่โหวต · หยุดเมื่อกิจกรรมปิด':'ระบบเตือนพักอยู่ เปิดระบบเตือนก่อนบันทึกช่วงใหม่';
+  $('#adminReminderHint').textContent=data.reminderEngine?.enabled?'รอบแรกหลังบันทึกหรือเริ่มโหวตครบช่วงที่ตั้ง · แท็กเฉพาะคนที่ยังไม่โหวต · หยุดเมื่อกิจกรรมปิด':'ระบบเตือนพักอยู่ เปิดระบบส่งเตือนในส่วนนี้ก่อนบันทึกช่วงใหม่';
 }
 $('#enableActivityReminders').onchange=renderReminderFields;
 $('#adminStartMode').onchange=()=>{
@@ -210,6 +210,7 @@ function renderReminderEngine(){
   $('#toggleReminderEngine').disabled=!engine;
   $('#toggleReminderEngine').textContent=engine?.enabled?'พักระบบเตือน':'เปิดระบบเตือน';
   $('#reminderEngineStatus').textContent=!engine?'ระบบเตือนยังไม่พร้อม':engine.enabled?'เปิดใช้งาน · '+(engine.lastTickAt?'ตรวจล่าสุด '+formatVotingDate(engine.lastTickAt):'รอรอบตรวจตารางแรก'):'พักการส่งข้อความเตือน';
+  renderReminderFields();
 }
 function renderReminders(){
   $('#activityReminders').hidden=!user?.admin;
