@@ -35,7 +35,7 @@ function updateStartConstraints(){
   for(const o of $('#adminStartMinute').options)o.disabled=today&&(selectedHour<hour||(selectedHour===hour&&Number(o.value)<=minute));
   if(!locked&&$('#adminStartMode').value==='scheduled'&&input.value&&new Date(`${input.value}T${$('#adminStartHour').value}:${$('#adminStartMinute').value}:00+07:00`).getTime()<=Date.now())input.setCustomValidity('เวลาเริ่มต้องอยู่ในอนาคต ไม่สามารถกำหนดย้อนหลังได้');
 }
-function activityStatusLabel(a){return a.status==='scheduled'?'รอเริ่มโหวต':a.status==='closed'?'ปิดโหวตแล้ว':'เปิดโหวต';}
+function activityStatusLabel(a){return a.status==='scheduled'?'รอเริ่มโหวต':a.status==='closed'?(a.closeReason==='all_voted'?'โหวตครบแล้ว':'ปิดโหวตแล้ว'):'เปิดโหวต';}
 function message(text){clearTimeout(toastTimer);$('#toast').textContent=text;$('#toast').hidden=false;toastTimer=setTimeout(()=>$('#toast').hidden=true,5000);}
 function error(text){$('#pageError').textContent=text;$('#pageError').hidden=false;}
 function el(tag,text,className){const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(className)e.className=className;return e;}
@@ -111,6 +111,7 @@ function renderDetail(){
   $('#activityTitle').textContent=a.topic;$('#activityStatus').textContent=activityStatusLabel(a);$('#activityStatus').classList.toggle('closed',closed);
   $('#activityDeadline').textContent=formatVotingDate(a.endAt);$('#completedCount').textContent=a.completed;$('#eligibleCount').textContent=a.total;$('#candidateCount').textContent=a.candidates.length;
   $('#closedBanner').hidden=!closed;
+  $('#closedBanner h2').textContent=activityStatusLabel(a);
   $('#closeReason').textContent=({all_voted:'ผู้มีสิทธิ์โหวตครบทุกคนแล้ว ระบบจึงปิดก่อนเวลา',deadline:'สิ้นสุดตามเวลาที่กำหนด',manual:'ผู้ดูแลปิดกิจกรรมแล้ว'}[a.closeReason]||'กิจกรรมนี้สิ้นสุดแล้ว')+(a.closedAt?' · '+formatVotingDate(a.closedAt):'');
   $('#announceVoteBtn').hidden=!user?.admin;$('#announceVoteBtn').disabled=a.status!=='open';
   $('#editActivityBtn').hidden=!user?.admin||closed;$('#closeActivityBtn').hidden=!user?.admin||closed;
@@ -119,8 +120,8 @@ function renderDetail(){
   $('#rankingUpdated').textContent='อัปเดต '+formatVotingDate(new Date().toISOString());
   $('#voteFields').hidden=!a.canVote;$('#voteLogin').hidden=Boolean(user)||closed;
   $('#votePanel').classList.toggle('locked',Boolean(a.myVote));
-  const reasons={login:'เข้าสู่ระบบเพื่อดูสิทธิ์และโหวต',admin:'กิจกรรมนี้ไม่อนุญาตให้ Admin และ Subadmin โหวต',scheduled:'เริ่มโหวต '+formatVotingDate(a.startAt),closed:'กิจกรรมนี้ปิดโหวตแล้ว',ineligible:'บัญชีนี้ไม่อยู่ในรายชื่อผู้มีสิทธิ์ตอนสร้างกิจกรรม'};
-  $('#voteHeading').textContent=a.myVote?'โหวตของคุณถูกบันทึกแล้ว':closed?'การโหวตสิ้นสุดแล้ว':a.status==='scheduled'?'ยังไม่ถึงเวลาเริ่มโหวต':'เลือกคนที่คุณต้องการโหวต';
+  const reasons={login:'เข้าสู่ระบบเพื่อดูสิทธิ์และโหวต',admin:'กิจกรรมนี้ไม่อนุญาตให้ Admin และ Subadmin โหวต',scheduled:'เริ่มโหวต '+formatVotingDate(a.startAt),closed:a.closeReason==='all_voted'?'ผู้มีสิทธิ์โหวตครบทุกคนแล้ว':'กิจกรรมนี้ปิดโหวตแล้ว',ineligible:'บัญชีนี้ไม่อยู่ในรายชื่อผู้มีสิทธิ์ตอนสร้างกิจกรรม'};
+  $('#voteHeading').textContent=a.myVote?'โหวตของคุณถูกบันทึกแล้ว':closed?(a.closeReason==='all_voted'?'โหวตครบแล้ว':'การโหวตสิ้นสุดแล้ว'):a.status==='scheduled'?'ยังไม่ถึงเวลาเริ่มโหวต':'เลือกคนที่คุณต้องการโหวต';
   $('#voteMessage').textContent=a.myVote?'คุณโหวตให้ '+a.myVote.name+' · '+formatVotingDate(a.myVote.votedAt)+' · เปลี่ยนโหวตไม่ได้':closed?reasons.closed:a.status==='scheduled'?reasons.scheduled:reasons[a.voteBlockedReason]||'พิมพ์ชื่อเพื่อค้นหา · ห้ามโหวตตัวเอง · โหวตได้ครั้งเดียว';
   $('#candidateList').replaceChildren(...a.candidates.filter(c=>!c.isSelf).map(c=>{const option=el('option');option.value=c.name+' · '+c.id.slice(-6);return option;}));
   $('#candidateSearch').value='';$('#submitVote').disabled=!a.canVote;
@@ -213,12 +214,12 @@ function renderReminderEngine(){
 function renderReminders(){
   $('#activityReminders').hidden=!user?.admin;
   const enabled=data.reminderEngine?.enabled,open=['open','scheduled'].includes(selected?.status),plan=selected?.reminderInterval;
-  $('#reminderHelp').textContent=!open?'กิจกรรมปิดแล้ว ระบบจะไม่ส่งเตือนอีก':!enabled?'เปิดระบบเตือนด้านบนก่อน':'เปลี่ยนช่วงเตือนได้ใน “แก้ไขกิจกรรม” · แท็กเฉพาะคนที่ยังไม่โหวต · ตรวจประมาณทุก 1 นาที';
+  $('#reminderHelp').textContent=!open?(selected?.closeReason==='all_voted'?'โหวตครบแล้ว ระบบจะไม่ส่งเตือนอีก':'กิจกรรมปิดแล้ว ระบบจะไม่ส่งเตือนอีก'):!enabled?'เปิดระบบเตือนด้านบนก่อน':'เปลี่ยนช่วงเตือนได้ใน “แก้ไขกิจกรรม” · แท็กเฉพาะคนที่ยังไม่โหวต · ตรวจประมาณทุก 1 นาที';
   const labels={pending:'รอส่ง',partial:'ส่งแล้วบางส่วน',sending:'กำลังส่ง',sent:'ส่งแล้ว',cancelled:'ยกเลิกแล้ว',skipped:'ข้ามการส่ง',blocked:'ติดปัญหา',failed:'ส่งไม่สำเร็จ',unknown:'ยังยืนยันการส่งไม่ได้'};
   $('#reminderIntervalStatus').replaceChildren();
   if(plan){
     const unit=plan.intervalMinutes%60===0?'hours':'minutes',value=unit==='hours'?plan.intervalMinutes/60:plan.intervalMinutes;
-    const state={active:enabled?'เปิดเตือนซ้ำ':'พักตามระบบเตือน',stopped:'หยุดเตือนแล้ว',closed:'กิจกรรมปิดแล้ว',finished:'ไม่มีรอบเตือนก่อนปิดโหวต',blocked:'หยุดส่งเนื่องจากปัญหา'};
+    const state={active:enabled?'เปิดเตือนซ้ำ':'พักตามระบบเตือน',stopped:'หยุดเตือนแล้ว',closed:selected?.closeReason==='all_voted'?'โหวตครบแล้ว':'กิจกรรมปิดแล้ว',finished:'ไม่มีรอบเตือนก่อนปิดโหวต',blocked:'หยุดส่งเนื่องจากปัญหา'};
     $('#reminderIntervalStatus').append(el('strong',`${state[plan.status]||plan.status} · ทุก ${value} ${unit==='hours'?'ชั่วโมง':'นาที'}`));
     if(plan.status==='active'&&plan.nextAt)$('#reminderIntervalStatus').append(el('p','รอบถัดไป '+formatVotingDate(plan.nextAt),'muted'));
     if(plan.lastSentAt)$('#reminderIntervalStatus').append(el('p','ส่งล่าสุด '+formatVotingDate(plan.lastSentAt),'muted'));
