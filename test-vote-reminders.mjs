@@ -45,7 +45,7 @@ const config=context.getConfig_(),claim={activityId:config.activityId,topic:conf
 assert.equal(context.claimAnnouncement_(claim).alreadySent,false);
 assert.throws(()=>context.claimAnnouncement_({...claim,requestId:'duplicate'}),'Concurrent announcement must be blocked');
 assert.throws(()=>context.finishAnnouncement_({requestId:'wrong',status:'sent',messageName:'spaces/AAQASHHP1Y4/messages/mock'}));
-context.finishAnnouncement_({requestId:claim.requestId,status:'sent',messageName:'spaces/AAQASHHP1Y4/messages/mock'});
+context.finishAnnouncement_({activityId:claim.activityId,requestId:claim.requestId,status:'sent',messageName:'spaces/AAQASHHP1Y4/messages/mock'});
 assert.equal(context.claimAnnouncement_({...claim,requestId:'again'}).alreadySent,true);
 assert.throws(()=>context.claimAnnouncement_({...claim,topic:'changed'}),'Stale event snapshot must not be announced');
 console.log('PASS: vote-status lookup, latest-vote exclusion, timezone validation, scheduled sends, deduplication, cancellation, late/disabled guards, ambiguous-delivery handling and unmapped voter safety; all transport mocked.');

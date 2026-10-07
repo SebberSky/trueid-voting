@@ -32,6 +32,7 @@ function doPost(e) {
       .map(byte => ('0' + ((byte + 256) % 256).toString(16)).slice(-2)).join('');
     if (request.signature !== signature) throw new Error('Unauthorized');
     const body = JSON.parse(request.payload);
+    if (body.action === 'app') return json_(app_(body));
     if (body.action === 'registerClient') return json_(registerClient_(body));
     if (body.action === 'vote') return json_(recordVote_(body));
     if (body.action === 'saveConfig') return json_(saveConfig_(body));
@@ -185,25 +186,28 @@ function safeSheetText_(value) {return /^[=+@-]/.test(value)?"'"+value:value;}
 function claimAnnouncement_(body) {
   const lock=LockService.getScriptLock();lock.waitLock(10000);
   try {
-    const config=getConfig_(),props=PropertiesService.getScriptProperties();
+    const activity=typeof appRows_==='function'?appRows_('Activities').map(appActivity_).find(a=>a.id===body.activityId):null;
+    const config=activity?{...getVotingEnvironment_(),exists:true,activityId:activity.id,...activity}:getConfig_(),props=PropertiesService.getScriptProperties();
     if(!config.exists||config.status!=='open'||Date.parse(config.endAt)<=Date.now()||config.activityId!==body.activityId||config.topic!==body.topic||String(config.endAt)!==body.endAt||config.environment!==body.environment||config.chatSpaceId!==body.spaceId)throw Error('กิจกรรมหรือห้องเปลี่ยนแล้ว กรุณารีเฟรชก่อนประกาศ');
     if(!/^[a-f0-9]{64}$/.test(body.fingerprint||'')||!body.requestId)throw Error('Invalid announcement request');
-    const old=JSON.parse(props.getProperty('ACTIVITY_ANNOUNCEMENT_STATE')||'{}');
+    const stateKey='ACTIVITY_ANNOUNCEMENT_'+body.activityId;
+    const legacyState=JSON.parse(props.getProperty('ACTIVITY_ANNOUNCEMENT_STATE')||'{}');
+    const old=JSON.parse(props.getProperty(stateKey)||'null')||(legacyState.activityId===body.activityId?legacyState:{});
     // Unknown/in-flight delivery requires manual verification even if settings changed.
     if(['sending','unknown'].includes(old.status))throw Error('ประกาศก่อนหน้ายังไม่ยืนยัน กรุณาตรวจห้องแชทก่อน ไม่ส่งซ้ำ');
     if(old.fingerprint===body.fingerprint&&old.status==='sent')return {ok:true,alreadySent:true};
-    props.setProperty('ACTIVITY_ANNOUNCEMENT_STATE',JSON.stringify({fingerprint:body.fingerprint,requestId:body.requestId,activityId:body.activityId,environment:body.environment,spaceId:body.spaceId,status:'sending',attemptAt:new Date().toISOString()}));
+    props.setProperty(stateKey,JSON.stringify({fingerprint:body.fingerprint,requestId:body.requestId,activityId:body.activityId,environment:body.environment,spaceId:body.spaceId,status:'sending',attemptAt:new Date().toISOString()}));
     return {ok:true,alreadySent:false};
   }finally{lock.releaseLock();}
 }
 function finishAnnouncement_(body) {
   const lock=LockService.getScriptLock();lock.waitLock(10000);
   try {
-    const props=PropertiesService.getScriptProperties(),state=JSON.parse(props.getProperty('ACTIVITY_ANNOUNCEMENT_STATE')||'{}');
+    const props=PropertiesService.getScriptProperties(),stateKey='ACTIVITY_ANNOUNCEMENT_'+body.activityId,state=JSON.parse(props.getProperty(stateKey)||'{}');
     if(state.requestId!==body.requestId||state.status!=='sending'||!['sent','failed','unknown'].includes(body.status))throw Error('Invalid announcement result');
     if(body.status==='sent'&&!String(body.messageName||'').startsWith('spaces/'+state.spaceId+'/messages/'))throw Error('Invalid message receipt');
     state.status=body.status;state.completedAt=new Date().toISOString();if(body.status==='sent')state.messageName=body.messageName;
-    props.setProperty('ACTIVITY_ANNOUNCEMENT_STATE',JSON.stringify(state));return {ok:true};
+    props.setProperty(stateKey,JSON.stringify(state));return {ok:true};
   }finally{lock.releaseLock();}
 }
 

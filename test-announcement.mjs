@@ -24,12 +24,15 @@ globalThis.fetch=async(input,options)=>{
   const url=String(input);
   if(url.startsWith('https://script.google.com/')){
     if(!options)return Response.json(config);
-    const envelope=JSON.parse(options.body);assert.equal(envelope.signature,createHmac('sha256',env.JIRA_CLIENT_SECRET).update(envelope.payload).digest('hex'));const body=JSON.parse(envelope.payload);writes.push(body);
+    const envelope=JSON.parse(options.body);assert.equal(envelope.signature,createHmac('sha256',env.JIRA_CLIENT_SECRET).update(envelope.payload).digest('hex'));const body=JSON.parse(envelope.payload);
+    if(body.action==='app'&&body.op==='profile')return Response.json({ok:true,user:body.actor});
+    if(body.action==='app'&&body.op==='config')return Response.json(config);
+    writes.push(body);
     if(body.action==='claimAnnouncement')return Response.json({ok:true,alreadySent:mode==='duplicate'});
     return Response.json({ok:true});
   }
   assert.equal(url,env.GOOGLE_CHAT_WEBHOOK_URL,'Only selected-room webhook is used');
-  sent++;const message=JSON.parse(options.body);assert.ok(message.text.includes(origin+'/#vote'));assert.ok(message.text.includes('06 ตุลาคม 2030 · 19:00'));assert.ok(!message.text.includes('<users/'),'Announcement never adds user mentions');
+  sent++;const message=JSON.parse(options.body);assert.ok(message.text.includes(origin+'/?activity=activity-1#vote'));assert.ok(message.text.includes('06 ตุลาคม 2030 · 19:00'));assert.ok(!message.text.includes('<users/'),'Announcement never adds user mentions');
   if(mode==='timeout')throw Error('mock transport timeout');
   if(mode==='bad-receipt')return Response.json({name:'spaces/WRONG/messages/mock'});
   return Response.json({name:'spaces/AAQA0MkG6JM/messages/mock'});

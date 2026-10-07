@@ -44,6 +44,10 @@ async function sheetWrite(body,env) {
   if(result.ok===false)throw Error(result.error||'บันทึกข้อมูลไม่สำเร็จ');
   return result;
 }
+async function currentUser(req,env) {
+  const actor=await session(req,env);
+  return actor ? (await sheetWrite({action:'app',op:'profile',actor},env)).user : null;
+}
 async function fetchChatMembers(env, replacementRefreshToken) {
   const stored=replacementRefreshToken?null:await sheetWrite({action:'getChatConnection'},env);
   const refreshToken=replacementRefreshToken||stored?.refreshToken||env.GOOGLE_CHAT_REFRESH_TOKEN;
@@ -84,7 +88,7 @@ export default {
     const url = new URL(req.url);
     try {
       if (url.pathname === '/auth/google-chat') {
-        const user=await session(req,env);
+        const user=await currentUser(req,env);
         if(!user)return json({error:'กรุณาเข้าสู่ระบบด้วย Jira ก่อน'},401);
         if(!user.admin)return json({error:'เฉพาะผู้ดูแลเท่านั้น'},403);
         if(!env.GOOGLE_CHAT_CLIENT_ID||!env.GOOGLE_CHAT_CLIENT_SECRET)return redirect('/?chat=unconfigured');
@@ -98,7 +102,7 @@ export default {
       }
       if (url.pathname === '/oauth/google-chat/callback') {
         const finish=status=>redirect('/?chat='+status+'#memberAdmin',[cookie('tv_chat_oauth','',0)]);
-        const user=await session(req,env);
+        const user=await currentUser(req,env);
         if(!user?.admin)return finish('expired');
         try {
           const [value,sig]=(cookies(req).tv_chat_oauth||'').split('.');
@@ -122,7 +126,8 @@ export default {
         const state = crypto.randomUUID();
         const target = new URL('https://auth.atlassian.com/authorize');
         target.search = new URLSearchParams({audience:'api.atlassian.com',client_id:env.JIRA_CLIENT_ID,scope:'read:me read:jira-user',redirect_uri:ORIGIN+'/oauth/callback',state,response_type:'code',prompt:'consent'}).toString();
-        return redirect(target.toString(),[cookie('tv_oauth_state',state,600)]);
+        const activity=url.searchParams.get('activity')||'';
+        return redirect(target.toString(),[cookie('tv_oauth_state',state,600),cookie('tv_login_activity',/^[a-zA-Z0-9_-]{1,80}$/.test(activity)?activity:'',600)]);
       }
       if (url.pathname === '/oauth/callback') {
         if (url.searchParams.has('error')) return authError('การอนุญาตเข้าถึงบัญชี Jira ถูกยกเลิก');
@@ -136,19 +141,20 @@ export default {
         const email = String(profile.email || '').toLowerCase();
         const user = {id:profile.account_id,email,name:profile.name || email,admin:ADMINS.includes(email),exp:Date.now()+8*3600000};
         await sheetWrite({action:'registerClient',accountId:user.id,name:user.name,email:user.email},env);
-        return redirect('/#vote',[cookie('tv_session',await sign(user,env),8*3600),cookie('tv_oauth_state','',0)]);
+        const activity=cookies(req).tv_login_activity||'';
+        return redirect(/^[a-zA-Z0-9_-]{1,80}$/.test(activity)?'/?activity='+encodeURIComponent(activity)+'#vote':'/#activities',[cookie('tv_session',await sign(user,env),8*3600),cookie('tv_oauth_state','',0),cookie('tv_login_activity','',0)]);
       }
       if (url.pathname === '/auth/logout' && req.method === 'POST') {
         if (req.headers.get('Origin') !== ORIGIN) return json({error:'Forbidden'},403);
         return redirect('/',[cookie('tv_session','',0)]);
       }
       if (url.pathname === '/api/session') {
-        const user=await session(req,env);
-        if(user)await sheetWrite({action:'registerClient',accountId:user.id,name:user.name,email:user.email},env);
-        return json({user});
+        const actor=await session(req,env);
+        if(actor)await sheetWrite({action:'registerClient',accountId:actor.id,name:actor.name,email:actor.email},env);
+        return json({user:actor?(await sheetWrite({action:'app',op:'profile',actor},env)).user:null});
       }
       if (['/api/chat/status','/api/chat/sync','/api/chat/connect'].includes(url.pathname)) {
-        const user=await session(req,env);
+        const user=await currentUser(req,env);
         if(!user)return json({ok:false,error:'กรุณาเข้าสู่ระบบก่อน'},401);
         if(!user.admin)return json({ok:false,error:'เฉพาะผู้ดูแลเท่านั้น'},403);
         const configured=Boolean(env.GOOGLE_CHAT_CLIENT_ID&&env.GOOGLE_CHAT_CLIENT_SECRET&&env.GOOGLE_CHAT_SPACE_ID);
@@ -175,10 +181,11 @@ export default {
       }
       if (url.pathname === '/api/announcement') {
         if(req.method!=='POST')return json({error:'Method not allowed'},405);
-        const user=await session(req,env);
+        const user=await currentUser(req,env);
         if(!user)return json({error:'กรุณาเข้าสู่ระบบก่อน'},401);
         if(!user.admin||req.headers.get('Origin')!==ORIGIN)return json({error:'เฉพาะผู้ดูแลจากเว็บนี้เท่านั้น'},403);
-        const config=await sheetRead('config'),mode=votingEnvironment(env);
+        const body=await req.json();
+        const config=await sheetWrite({action:'app',op:'config',actor:user,activityId:body.activityId},env),mode=votingEnvironment(env);
         if(!config.exists||config.status!=='open'||!Number.isFinite(Date.parse(config.endAt))||Date.parse(config.endAt)<=Date.now())return json({error:'ต้องมีกิจกรรมที่เปิดโหวตและยังไม่สิ้นสุดก่อนประกาศ'},400);
         const expected={test:'AAQA0MkG6JM',production:'AAQASHHP1Y4'}[mode.environment];
         let target;
@@ -187,9 +194,9 @@ export default {
         const fingerprint=await hmac(JSON.stringify([config.activityId,config.topic,config.endAt,mode.environment,expected]),env.JIRA_CLIENT_SECRET),requestId=crypto.randomUUID();
         const claim=await sheetWrite({action:'claimAnnouncement',activityId:config.activityId,topic:config.topic,endAt:config.endAt,environment:mode.environment,spaceId:expected,fingerprint,requestId},env);
         if(claim.alreadySent)return json({ok:true,alreadySent:true});
-        const finish=state=>sheetWrite({action:'finishAnnouncement',requestId,...state},env);
+        const finish=state=>sheetWrite({action:'finishAnnouncement',activityId:config.activityId,requestId,...state},env);
         const topic=String(config.topic).slice(0,200).replace(/[<>]/g,'');
-        const text=`TrueID Voting — เปิดโหวต\n${topic}\nทุกบัญชีโหวตได้ครั้งเดียว\nสิ้นสุด ${announcementDeadline(config.endAt)} (เวลาไทย)\n${ORIGIN}/#vote`;
+        const text=`TrueID Voting — เปิดโหวต\n${topic}\nทุกบัญชีโหวตได้ครั้งเดียวต่อกิจกรรม\nสิ้นสุด ${announcementDeadline(config.endAt)} (เวลาไทย)\n${ORIGIN}/?activity=${encodeURIComponent(config.activityId)}#vote`;
         let response;
         try{response=await fetch(target,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text}),signal:AbortSignal.timeout(15000)});}
         catch{await finish({status:'unknown'});return json({error:'ยังยืนยันการส่งไม่ได้ กรุณาตรวจในห้องแชทก่อน ไม่ส่งซ้ำอัตโนมัติ'},502);}
@@ -201,21 +208,20 @@ export default {
         return json({ok:true,alreadySent:false,spaceName:mode.spaceName});
       }
       if (url.pathname === '/api/data') {
-        const [config, result] = await Promise.all([sheetRead('config'), sheetRead('results')]);
-        const rows = (result.results || []).slice(1);
-        const mode=votingEnvironment(env),ready=mode.candidateSource!=='chat_members_only'||(config.chatSpaceId===env.GOOGLE_CHAT_SPACE_ID&&config.candidateSource===mode.candidateSource);
-        return json({config:{...config,...mode,...(!ready?{candidateCount:0}:{}),needsSync:!ready},candidates:config.exists&&ready?(config.candidates||[]).filter(c=>c.active).map(c=>({id:c.candidateId,name:c.name})):[],results:config.exists&&ready?rows.map(r=>({rank:r[0],id:r[1],name:r[2],votes:r[3],award:r[4]})):[]});
+        const actor=await session(req,env),mode=votingEnvironment(env);
+        const result=await sheetWrite({action:'app',op:'dashboard',actor,activityId:url.searchParams.get('activity')||''},env);
+        return json({...result,...mode});
       }
-      if (url.pathname === '/api/sheet' && req.method === 'POST') {
+      if (['/api/app','/api/sheet'].includes(url.pathname) && req.method === 'POST') {
         if (req.headers.get('Origin') !== ORIGIN) return json({ok:false,error:'Forbidden'},403);
         const user = await session(req,env);
         if (!user) return json({ok:false,error:'กรุณาเข้าสู่ระบบด้วย Jira ก่อน'},401);
         const body = await req.json();
-        if (body.action === 'saveConfig' && !user.admin) return json({ok:false,error:'ไม่มีสิทธิ์ผู้ดูแล'},403);
-        if (!['vote','saveConfig'].includes(body.action)) return json({ok:false,error:'Unknown action'},400);
-        body.voterId = user.id; body.voterEmail = user.email;
-        delete body.candidates;
-        try {return json(await sheetWrite(body,env));}catch(e){return json({ok:false,error:e.message},400);}
+        const op=url.pathname==='/api/sheet'?(body.action==='vote'?'vote':body.action==='saveConfig'?(body.activityId?'update':'create'):''):body.op;
+        if(!['create','update','vote','close','setRole','history'].includes(op))return json({ok:false,error:'Unknown action'},400);
+        // Identity and role are never accepted from browser input.
+        const payload={action:'app',op,actor:{id:user.id,email:user.email,name:user.name},activityId:body.activityId,candidateId:body.candidateId,topic:body.topic,endAt:body.endAt,awards:body.awards,email:body.email,role:body.role};
+        try {return json(await sheetWrite(payload,env));}catch(e){return json({ok:false,error:e.message},400);}
       }
       if (url.pathname.startsWith('/api/')) return json({error:'Not found'},404);
       if (url.pathname === '/client.js') return new Response(CLIENT,{headers:{'Content-Type':'text/javascript; charset=utf-8','Cache-Control':'no-store'}});

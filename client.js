@@ -1,165 +1,180 @@
-const $ = s => document.querySelector(s);
-const toast = $('#toast');
-let user = null, data = null;
+const $=s=>document.querySelector(s);
+let data=null,user=null,selected=null,editing=null,filter='all',pending=0,toastTimer,closeTimer;
 function formatVotingDate(value) {
   const date=new Date(value);if(!value||!Number.isFinite(date.getTime()))return 'ยังไม่ได้กำหนด';
-  const parts=Object.fromEntries(new Intl.DateTimeFormat('th-TH-u-ca-gregory',{timeZone:'Asia/Bangkok',day:'2-digit',month:'long',year:'numeric',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(date).map(p=>[p.type,p.value]));
-  return `${parts.day} ${parts.month} ${parts.year} · ${parts.hour}:${parts.minute} น.`;
+  const p=Object.fromEntries(new Intl.DateTimeFormat('th-TH-u-ca-gregory',{timeZone:'Asia/Bangkok',day:'2-digit',month:'long',year:'numeric',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(date).map(p=>[p.type,p.value]));
+  return `${p.day} ${p.month} ${p.year} · ${p.hour}:${p.minute} น.`;
 }
 function setDeadlineFields(value) {
-  const date=new Date(value),valid=value&&Number.isFinite(date.getTime());
-  const local=valid?new Date(date.getTime()+7*3600000).toISOString():'';
+  const date=new Date(value),valid=value&&Number.isFinite(date.getTime()),local=valid?new Date(date.getTime()+7*3600000).toISOString():'';
   $('#adminEndDateInput').value=local.slice(0,10);$('#adminEndHour').value=valid?local.slice(11,13):'19';$('#adminEndMinute').value=valid?local.slice(14,16):'00';
 }
 for(const [id,size] of [['adminEndHour',24],['adminEndMinute',60]]){
-  $( '#'+id).replaceChildren(...Array.from({length:size},(_,i)=>{const option=document.createElement('option');option.value=String(i).padStart(2,'0');option.textContent=option.value;return option;}));
+  $('#'+id).replaceChildren(...Array.from({length:size},(_,i)=>{const o=document.createElement('option');o.value=String(i).padStart(2,'0');o.textContent=o.value;return o;}));
 }
 setDeadlineFields('');
-function message(text) { toast.textContent=text; toast.classList.add('show'); setTimeout(()=>toast.classList.remove('show'),4000); }
-async function api(path, body) {
-  const response = await fetch(path,body ? {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)} : {});
-  const result = await response.json();
-  if (!response.ok || result.ok === false) throw Error(result.error || 'เชื่อมต่อไม่สำเร็จ');
-  return result;
+function message(text){clearTimeout(toastTimer);$('#toast').textContent=text;$('#toast').hidden=false;toastTimer=setTimeout(()=>$('#toast').hidden=true,5000);}
+function error(text){$('#pageError').textContent=text;$('#pageError').hidden=false;}
+function el(tag,text,className){const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(className)e.className=className;return e;}
+async function api(path,body){
+  pending++;$('#globalLoading').hidden=false;$('#workspace').setAttribute('aria-busy','true');
+  try{
+    const r=await fetch(path,body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{});
+    const result=await r.json();if(!r.ok||result.ok===false)throw Error(result.error||'เชื่อมต่อไม่สำเร็จ');return result;
+  }finally{pending--;$('#globalLoading').hidden=pending===0;$('#workspace').setAttribute('aria-busy',String(pending>0));}
 }
-function showMode(mode) {
-  if(mode==='admin'&&!user?.admin)return;
-  document.querySelectorAll('[data-mode]').forEach(b=>b.classList.toggle('active',b.dataset.mode===mode));
-  document.querySelectorAll('[data-panel]').forEach(p=>p.classList.toggle('active',p.dataset.panel===mode));
+async function busy(button,action){
+  if(button.disabled)return;const text=button.textContent;button.disabled=true;button.textContent='กำลังดำเนินการ…';$('#pageError').hidden=true;
+  try{await action();}catch(e){error(e.message);}finally{button.textContent=text;button.disabled=button.id==='submitVote'?!selected?.canVote:button.id==='announceVoteBtn'?selected?.status==='closed':false;}
 }
-function renderActivityState() {
-  const exists=Boolean(data?.config.exists);
-  $('.landing').hidden=true;
-  $('.intro').hidden=!exists;
-  $('#emptyState').hidden=exists;
-  $('.mode-switch').hidden=!exists;
-  $('#vote').hidden=!exists;
-  $('[data-panel="admin"]').hidden=!exists;
-  $('#results').hidden=!exists;
-  $('.footer-note').hidden=!exists;
-  document.querySelectorAll('.nav a').forEach(a=>a.hidden=!exists);
-  $('#createActivityBtn').hidden=!user?.admin;
-  $('#emptyWaiting').hidden=Boolean(user?.admin);
-  $('#emptyLoginHint').hidden=Boolean(user);
-  $('#emptyDescription').textContent=user?.admin?(data?.config.candidateSource==='chat_members_only'?'เริ่มกิจกรรมทดสอบ กำหนดหัวข้อ วันสิ้นสุด และรางวัลตามอันดับ ผู้เข้าชิงใช้เฉพาะสมาชิกห้องแชททดสอบ':'เริ่มกิจกรรมแรกของทีม กำหนดหัวข้อ วันสิ้นสุด และรางวัลตามอันดับ ใช้รายชื่อผู้ใช้ Client และสมาชิก Chat โดยอัตโนมัติ'):'เมื่อผู้ดูแลเปิดกิจกรรม คุณจะสามารถเลือกผู้เข้าชิงและโหวตได้ที่นี่';
-  $('#adminFormTitle').textContent=exists?'ตั้งค่ากิจกรรมโหวต':'สร้างกิจกรรมโหวต';
-  $('#adminSaveSettings').textContent=exists?'บันทึกการตั้งค่า':'สร้างและเปิดโหวต';
-  $('#shareVoteActions').hidden=!exists;
-  $('#announceVoteBtn').hidden=!user?.admin;
-  $('#announceVoteBtn').disabled=data?.config.status!=='open'||Date.parse(data?.config.endAt)<=Date.now();
-  $('#announceVoteBtn').textContent='ประกาศโหวตเข้าห้องแชท';
-  $('#announcementTarget').textContent=user?.admin?'ประกาศไปยัง '+(data?.config.spaceName||'ห้องที่เลือก'):'';
-  $('#cancelCreate').hidden=exists;
-  $('[data-panel="admin"] .section-title').hidden=!exists;
-  $('[data-panel="admin"] .awards').hidden=!exists;
+function confirmAction(title,text){
+  $('#confirmTitle').textContent=title;$('#confirmText').textContent=text;$('#confirmDialog').showModal();
+  return new Promise(resolve=>{
+    const done=value=>{$('#confirmDialog').close();resolve(value);};
+    $('#confirmProceed').onclick=()=>done(true);$('#confirmCancel').onclick=()=>done(false);
+    $('#confirmDialog').oncancel=e=>{e.preventDefault();done(false);};
+  });
 }
-$('#createActivityBtn').onclick=()=>{if(!user?.admin)return;$('#emptyState').hidden=true;$('[data-panel="admin"]').hidden=false;showMode('admin');$('#adminTopicInput').focus();};
-$('#cancelCreate').onclick=()=>{renderActivityState();showMode('client');};
-$('#loginBtn').onclick=()=>location.assign('/auth/login');
-$('#jiraLogin').onclick=()=>location.assign('/auth/login');
-$('#cancel').onclick=()=>$('#modal').classList.remove('open');
-document.querySelectorAll('[data-mode]').forEach(b=>b.onclick=()=>showMode(b.dataset.mode));
-$('[data-mode="admin"]').hidden=true;
-$('#searchVoteBtn').disabled=true;
-async function loadData(preserveForm=false) {
-  const draft=preserveForm?[$('#adminTopicInput').value,$('#adminEndDateInput').value,$('#adminAwards').value,$('#adminEndHour').value,$('#adminEndMinute').value]:null;
-  const wasCreating=preserveForm&&!data?.config.exists&&!$('[data-panel="admin"]').hidden;
-  data = await api('/api/data');
-  $('#loadingState').hidden=true;
-  renderActivityState();
-  $('.intro h1').textContent=data.config.topic || 'ยังไม่ได้กำหนดหัวข้อการโหวต';
-  $('.intro .eyebrow').textContent=data.config.status==='open'?'เปิดโหวตอยู่':'ปิดโหวตแล้ว';
-  $('.deadline strong').textContent=formatVotingDate(data.config.endAt);
-  $('#adminTopicInput').value=data.config.topic || '';
-  setDeadlineFields(data.config.endAt);
-  const strict=data.config.candidateSource==='chat_members_only';
-  $('#candidateSourceCount').textContent=`${strict?'สมาชิกห้องแชทเท่านั้น':'ผู้ใช้ Client และสมาชิก Chat'} · ${data.config.candidateCount||0} คน`;
-  $('#candidateSourceCount').nextElementSibling.textContent=strict?'ผู้เข้าชิงตรงกับสมาชิกห้องที่ซิงก์ล่าสุด การล็อกอินนอกห้องไม่เพิ่มผู้เข้าชิง':'ใช้สมาชิกห้อง Chat ที่ซิงก์แล้วและผู้ใช้ Client จับคู่รายชื่อด้วยอีเมล ไม่ต้องกรอกผู้เข้าชิงเอง';
-  $('#environmentBadge').hidden=data.config.environment!=='test';
-  $('#chatSpaceCaption').textContent=data.config.spaceName+' · สำหรับผู้ดูแลเท่านั้น';
-  $('#adminAwards').value=(data.config.awards||[]).join('\n');
-  data.candidates.forEach(c=>c.label=c.name+(data.candidates.filter(other=>other.name===c.name).length>1?' · '+c.id.slice(-6):''));
-  $('#candidateList').replaceChildren(...data.candidates.map(c=>{const option=document.createElement('option');option.value=c.label;return option;}));
-  $('#candidateSearch').disabled=!data.candidates.length;
-  $('#searchVoteBtn').disabled=data.config.status!=='open'||!data.candidates.length||(data.config.endAt&&Date.parse(data.config.endAt)<Date.now());
-  const awards=$('[data-panel="admin"] .awards');awards.replaceChildren();
-  data.results.filter(r=>r.award).forEach(r=>{const item=document.createElement('article');item.className='award';const rank=document.createElement('span');rank.className='rank';rank.textContent='อันดับ '+r.rank;const title=document.createElement('h3');title.textContent=r.award;item.append(rank,title);awards.append(item);});
-  const results=$('#realResults'); results.replaceChildren();
-  data.results.forEach(r=>{const p=document.createElement('p');p.textContent=`${r.rank}. ${r.name} — ${r.votes} คะแนน${r.award ? ' · '+r.award : ''}`;results.append(p);});
-  if(draft){$('#adminTopicInput').value=draft[0];$('#adminEndDateInput').value=draft[1];$('#adminAwards').value=draft[2];$('#adminEndHour').value=draft[3];$('#adminEndMinute').value=draft[4];}
-  if(wasCreating){$('#emptyState').hidden=true;$('[data-panel="admin"]').hidden=false;showMode('admin');}
+function activityLink(id){return location.origin+'/?activity='+encodeURIComponent(id)+'#vote';}
+function showPage(page){
+  if(['admin','members'].includes(page)&&!user?.admin)return;
+  for(const id of ['activities','detail','history','admin','members'])$('#'+id+'Page').hidden=id!==page;
+  document.querySelectorAll('[data-page]').forEach(b=>b.classList.toggle('active',b.dataset.page===page));
+  if(page!=='detail')clearTimeout(closeTimer);
 }
-async function loadChatStatus() {
-  if(!user?.admin)return;
-  $('#memberAdmin').hidden=false;
-  const status=await api('/api/chat/status');
-  $('#chatSpaceCaption').textContent=status.spaceName+' · สำหรับผู้ดูแลเท่านั้น';
-  const latest=status.syncedAt?formatVotingDate(status.syncedAt):'ยังไม่เคยซิงก์';
-  $('#chatSyncStatus').textContent=status.needsSync?'ยังไม่ซิงก์สมาชิกห้องที่เลือก':`${status.count} คน · ซิงก์ล่าสุด ${latest}`;
-  $('#syncChatMembersBtn').disabled=!status.connected;
-  $('#chatMembersSummary').textContent=`รายชื่อสมาชิก ${status.count} คน`;
-  $('#chatMemberList').replaceChildren(...(status.members||[]).map(m=>{const li=document.createElement('li'),name=document.createElement('strong'),email=document.createElement('span');name.textContent=m.name;email.textContent=m.email;li.append(name,email);return li;}));
-  if(!status.connected){$('#chatSyncError').hidden=false;$('#chatSyncError').textContent='ยังไม่ได้ตั้งค่าการเชื่อมต่อ Google Chat';}
+function route(){
+  const id=new URL(location.href).searchParams.get('activity'),hash=location.hash;
+  if(id){selected=data.activities.find(a=>a.id===id)||null;if(selected){renderDetail();showPage('detail');return;}error('ไม่พบกิจกรรมจากลิงก์นี้');}
+  if(hash==='#history'){renderHistory();showPage('history');}
+  else if(hash==='#members'&&user?.admin){showPage('members');loadChatStatus().catch(e=>error(e.message));}
+  else if(hash==='#admin'&&user?.admin){openForm();}
+  else{renderCards();showPage('activities');}
 }
-$('#syncChatMembersBtn').onclick=async()=>{
-  if(!user?.admin)return;
-  const button=$('#syncChatMembersBtn');button.disabled=true;button.textContent='กำลังซิงก์สมาชิก…';$('#chatSyncError').hidden=true;
-  try {
-    const result=await api('/api/chat/sync',{});
-    await loadChatStatus();await loadData(true);
-    message(`ซิงก์สมาชิก ${result.count} คนแล้ว · เพิ่ม ${result.added} คน`);
-  }catch(e){$('#chatSyncError').textContent=e.message;$('#chatSyncError').hidden=false;}
-  finally{button.disabled=false;button.textContent='ซิงก์สมาชิกจาก Chat';}
+function navigate(page,id){
+  const target=new URL(location.href);if(id)target.searchParams.set('activity',id);else target.searchParams.delete('activity');
+  target.hash=id?'vote':page;history.pushState({},'',target);route();
+}
+document.querySelectorAll('[data-page]').forEach(b=>b.onclick=()=>navigate(b.dataset.page));
+document.querySelectorAll('[data-filter]').forEach(b=>b.onclick=()=>{filter=b.dataset.filter;document.querySelectorAll('[data-filter]').forEach(x=>x.classList.toggle('active',x===b));renderCards();});
+window.addEventListener('popstate',()=>data&&route());
+window.addEventListener('hashchange',()=>data&&route());
+function adopt(result){
+  data=result;user=result.user;
+  $('#initialLoading').hidden=true;$('#environmentBadge').hidden=data.environment!=='test';
+  $('#loginBtn').textContent=user?user.name+' · ออกจากระบบ':'เข้าสู่ระบบด้วย Jira';
+  $('#roleCaption').textContent=user?({admin:'Admin',subadmin:'Subadmin',client:'Client'}[user.role]||''):'';
+  $('#newActivityBtn').hidden=!user?.admin;
+  document.querySelectorAll('[data-page="admin"],[data-page="members"]').forEach(b=>b.hidden=!user?.admin);
+  renderCards();renderHistory();renderRoles();
+}
+async function loadData(){
+  const id=new URL(location.href).searchParams.get('activity')||'';
+  const result=await api('/api/data?activity='+encodeURIComponent(id));adopt(result);
+  if(id){selected=data.activities.find(a=>a.id===id);if(selected)renderDetail();}
+}
+function renderCards(){
+  const list=$('#activityCards');list.replaceChildren();
+  const activities=data.activities.filter(a=>filter==='all'||a.status===filter);
+  if(!activities.length){const card=el('div',undefined,'panel empty');card.append(el('h2',data.activities.length?'ไม่มีรายการในหมวดนี้':'ยังไม่มีกิจกรรมโหวต'),el('p',user?.admin?'กดสร้างโหวตเพื่อเริ่มกิจกรรม':'เมื่อผู้ดูแลเปิดกิจกรรม คุณจะโหวตได้ที่นี่','muted'));list.append(card);return;}
+  activities.forEach(a=>{
+    const card=el('article',undefined,'panel activity-card');card.append(el('span',a.status==='open'?'เปิดโหวต':'ปิดแล้ว','badge '+(a.status==='closed'?'closed':'')),el('h2',a.topic),el('p',formatVotingDate(a.endAt),'muted'),el('div',`${a.completed}/${a.total} คนโหวตแล้ว · ${a.candidates.length} ผู้เข้าชิง`,'meta'));
+    if(a.myVote)card.append(el('p','คุณโหวตให้ '+a.myVote.name,'muted'));
+    const button=el('button',a.status==='open'?'ดูอันดับและโหวต':'ดูผลโหวต');button.onclick=()=>navigate('detail',a.id);card.append(button);list.append(card);
+  });
+}
+function renderDetail(){
+  if(!selected)return;const a=selected,closed=a.status==='closed';
+  $('#activityTitle').textContent=a.topic;$('#activityStatus').textContent=closed?'ปิดโหวตแล้ว':'เปิดโหวต';$('#activityStatus').classList.toggle('closed',closed);
+  $('#activityDeadline').textContent=formatVotingDate(a.endAt);$('#completedCount').textContent=a.completed;$('#eligibleCount').textContent=a.total;$('#candidateCount').textContent=a.candidates.length;
+  $('#closedBanner').hidden=!closed;
+  $('#closeReason').textContent=({all_voted:'ผู้มีสิทธิ์โหวตครบทุกคนแล้ว ระบบจึงปิดก่อนเวลา',deadline:'สิ้นสุดตามเวลาที่กำหนด',manual:'ผู้ดูแลปิดกิจกรรมแล้ว'}[a.closeReason]||'กิจกรรมนี้สิ้นสุดแล้ว')+(a.closedAt?' · '+formatVotingDate(a.closedAt):'');
+  $('#announceVoteBtn').hidden=!user?.admin;$('#announceVoteBtn').disabled=closed;
+  $('#editActivityBtn').hidden=!user?.admin||closed;$('#closeActivityBtn').hidden=!user?.admin||closed;
+  $('#announcementTarget').textContent=user?.admin?'ประกาศไปยัง '+data.spaceName:'';
+  $('#rankingsTitle').textContent=closed?'อันดับสุดท้าย':'อันดับปัจจุบัน';
+  $('#rankingUpdated').textContent='อัปเดต '+formatVotingDate(new Date().toISOString());
+  $('#voteFields').hidden=!a.canVote;$('#voteLogin').hidden=Boolean(user)||closed;
+  $('#votePanel').classList.toggle('locked',Boolean(a.myVote));
+  const reasons={login:'เข้าสู่ระบบเพื่อดูสิทธิ์และโหวต',admin:'แอดมินและ Subadmin ไม่มีสิทธิ์โหวต',closed:'กิจกรรมนี้ปิดโหวตแล้ว',ineligible:'บัญชีนี้ไม่อยู่ในรายชื่อผู้มีสิทธิ์ตอนสร้างกิจกรรม'};
+  $('#voteHeading').textContent=a.myVote?'โหวตของคุณถูกบันทึกแล้ว':closed?'การโหวตสิ้นสุดแล้ว':'เลือกคนที่คุณต้องการโหวต';
+  $('#voteMessage').textContent=a.myVote?'คุณโหวตให้ '+a.myVote.name+' · '+formatVotingDate(a.myVote.votedAt)+' · เปลี่ยนโหวตไม่ได้':reasons[a.voteBlockedReason]||'พิมพ์ชื่อเพื่อค้นหา · ห้ามโหวตตัวเอง · โหวตได้ครั้งเดียว';
+  $('#candidateList').replaceChildren(...a.candidates.filter(c=>!c.isSelf).map(c=>{const option=el('option');option.value=c.name+' · '+c.id.slice(-6);return option;}));
+  $('#candidateSearch').value='';$('#submitVote').disabled=!a.canVote;
+  $('#rankingRows').replaceChildren(...a.results.map(r=>{const row=el('div',undefined,'rank-row');row.append(el('span',r.votes?r.rank:'–','rank'),el('span',r.name+(r.isSelf?' (คุณ)':''),'name'),el('span',String(r.votes),'score'),el('span',r.award?(r.tied?'อันดับร่วม · ':'')+r.award:'ยังไม่มีรางวัลผู้ชนะ','award'));return row;}));
+  $('#awardList').replaceChildren(...a.awards.map(x=>el('li',x)));
+  clearTimeout(closeTimer);
+  if(!closed){const delay=Math.max(1000,Math.min(Date.parse(a.endAt)-Date.now()+500,2147483000));closeTimer=setTimeout(()=>loadData().catch(e=>error(e.message)),delay);}
+}
+function renderHistory(){
+  const list=$('#historyList');list.replaceChildren();
+  if(!user){list.append(el('p','เข้าสู่ระบบด้วย Jira เพื่อดูประวัติโหวตของคุณ'));return;}
+  if(!data.history.length){list.append(el('h2','ยังไม่มีประวัติโหวต'),el('p','เมื่อคุณโหวต รายการจะแสดงที่นี่','muted'));return;}
+  data.history.forEach(h=>{const item=el('article',undefined,'history-item'),button=el('button','ดูผลกิจกรรม');button.onclick=()=>navigate('detail',h.activityId);item.append(el('h3',h.topic),el('p','โหวตให้ '+h.candidateName),el('p',formatVotingDate(h.votedAt),'muted'),button);list.append(item);});
+}
+function openForm(activity){
+  editing=activity?.id||null;showPage('admin');
+  $('#adminFormTitle').textContent=editing?'แก้ไขกิจกรรมโหวต':'สร้างกิจกรรมโหวต';
+  $('#adminSaveSettings').textContent=editing?'บันทึกการตั้งค่า':'สร้างและเปิดโหวต';
+  $('#adminTopicInput').value=activity?.topic||'';$('#adminAwards').value=(activity?.awards||[]).join('\n');
+  setDeadlineFields(activity?.endAt||'');$('#adminTopicInput').focus();
+}
+$('#newActivityBtn').onclick=()=>navigate('admin');
+$('#cancelForm').onclick=()=>editing?navigate('detail',editing):navigate('activities');
+$('#editActivityBtn').onclick=()=>openForm(selected);
+$('#backActivities').onclick=()=>navigate('activities');
+$('#refreshActivity').onclick=()=>busy($('#refreshActivity'),loadData);
+function login(){location.assign('/auth/login'+(selected?'?activity='+encodeURIComponent(selected.id):''));}
+$('#loginBtn').onclick=()=>{if(!user){login();return;}const f=document.createElement('form');f.method='POST';f.action='/auth/logout';document.body.append(f);f.submit();};
+$('#voteLogin').onclick=login;
+$('#activityForm').onsubmit=e=>{
+  e.preventDefault();busy($('#adminSaveSettings'),async()=>{
+    const endAt=new Date(`${$('#adminEndDateInput').value}T${$('#adminEndHour').value}:${$('#adminEndMinute').value}:00+07:00`);
+    if(!Number.isFinite(endAt.getTime())||endAt.getTime()<=Date.now())throw Error('กำหนดวันสิ้นสุดในอนาคต');
+    const r=await api('/api/app',{op:editing?'update':'create',activityId:editing,topic:$('#adminTopicInput').value.trim(),endAt:endAt.toISOString(),awards:$('#adminAwards').value.split('\n').map(x=>x.trim()).filter(Boolean)});
+    adopt({...r,environment:data.environment,spaceName:data.spaceName});navigate('detail',r.selectedId);message(editing?'บันทึกแล้ว':'สร้างโหวตแล้ว');
+  });
 };
-$('#candidateSearch').addEventListener('focus',async()=>{
-  if(!data?.config.exists)return;
-  try {
-    const latest=await api('/api/data');
-    data.candidates=latest.candidates;
-    data.candidates.forEach(c=>c.label=c.name+(data.candidates.filter(other=>other.name===c.name).length>1?' · '+c.id.slice(-6):''));
-    $('#candidateList').replaceChildren(...data.candidates.map(c=>{const option=document.createElement('option');option.value=c.label;return option;}));
-  } catch(e){message(e.message);}
+$('#submitVote').onclick=()=>busy($('#submitVote'),async()=>{
+  const a=selected;
+  const candidate=a.candidates.filter(c=>!c.isSelf).find(c=>$('#candidateSearch').value.trim()===c.name+' · '+c.id.slice(-6));
+  if(!candidate)throw Error('เลือกผู้เข้าชิงจากรายการ');
+  if(!await confirmAction('ยืนยันโหวต',`โหวตให้ ${candidate.name} ในกิจกรรม “${a.topic}” ยืนยันแล้วเปลี่ยนไม่ได้`))return;
+  const r=await api('/api/app',{op:'vote',activityId:a.id,candidateId:candidate.id});
+  adopt({...r,environment:data.environment,spaceName:data.spaceName});selected=data.activities.find(x=>x.id===a.id);renderDetail();message('บันทึกโหวตแล้ว');
 });
-$('#searchVoteBtn').onclick=async()=>{
-  if(!user){$('#modal').classList.add('open');return;}
-  const matches=data.candidates.filter(c=>c.label===$('#candidateSearch').value.trim());
-  if(matches.length!==1){message('กรุณาเลือกชื่อผู้เข้าชิงจากรายการ');return;}
-  const button=$('#searchVoteBtn');button.disabled=true;
-  try{await api('/api/sheet',{action:'vote',candidateId:matches[0].id});message('บันทึกโหวตลง Google Sheet แล้ว');button.textContent='โหวตเรียบร้อยแล้ว';await loadData();button.disabled=true;}catch(e){message(e.message==='Already voted'?'คุณโหวตไปแล้ว':e.message);button.disabled=false;}
-};
-$('#adminSaveSettings').onclick=async()=>{
-  const button=$('#adminSaveSettings'),creating=!data?.config.exists;
-  const topic=$('#adminTopicInput').value.trim(),date=$('#adminEndDateInput').value;
-  const awards=$('#adminAwards').value.split('\n').map(s=>s.trim()).filter(Boolean);
-  if(!topic||!date||!awards.length){message('กรุณากรอกหัวข้อ วันสิ้นสุด และรางวัลให้ครบ');return;}
-  const endAt=new Date(`${date}T${$('#adminEndHour').value}:${$('#adminEndMinute').value}:00+07:00`);
-  if(!Number.isFinite(endAt.getTime())||endAt.getTime()<=Date.now()){message('กรุณากำหนดวันสิ้นสุดในอนาคต');return;}
-  button.disabled=true;
-  try{await api('/api/sheet',{action:'saveConfig',topic,endAt:endAt.toISOString(),awards,status:'open'});await loadData();showMode('client');message(creating?'สร้างกิจกรรมและเปิดโหวตแล้ว':'บันทึกการตั้งค่าแล้ว');}catch(e){message(e.message);}finally{button.disabled=false;}
-};
+$('#closeActivityBtn').onclick=()=>busy($('#closeActivityBtn'),async()=>{
+  if(!await confirmAction('ปิดกิจกรรมโหวต','เมื่อปิดแล้วจะไม่รับโหวตและไม่เปิดกลับ คะแนนและประวัติจะยังอยู่'))return;
+  const r=await api('/api/app',{op:'close',activityId:selected.id});adopt({...r,environment:data.environment,spaceName:data.spaceName});selected=data.activities.find(x=>x.id===selected.id);renderDetail();message('ปิดโหวตแล้ว');
+});
 $('#copyVoteLinkBtn').onclick=async()=>{
-  const link=location.origin+'/#vote';
-  try{await navigator.clipboard.writeText(link);message('คัดลอกลิงก์โหวตแล้ว');}
-  catch{$('#voteShareLink').hidden=false;$('#voteShareLink').value=link;$('#voteShareLink').focus();$('#voteShareLink').select();message('เลือกข้อความลิงก์แล้ว กดคัดลอกได้เลย');}
+  const link=activityLink(selected.id);
+  try{await navigator.clipboard.writeText(link);message('คัดลอกลิงก์กิจกรรมแล้ว');}
+  catch{$('#voteShareLink').value=link;$('#voteShareLink').hidden=false;$('#voteShareLink').focus();$('#voteShareLink').select();message('เลือกข้อความแล้ว กดคัดลอกได้เลย');}
 };
-$('#announceVoteBtn').onclick=async()=>{
-  if(!user?.admin)return;
-  const button=$('#announceVoteBtn');button.disabled=true;button.textContent='กำลังประกาศ…';
+$('#announceVoteBtn').onclick=()=>busy($('#announceVoteBtn'),async()=>{
+  if(!await confirmAction('ประกาศโหวตเข้าห้องแชท',`ส่งหัวข้อและลิงก์กิจกรรม “${selected.topic}” ไปยัง ${data.spaceName}`))return;
   $('#announcementError').hidden=true;
-  try{const result=await api('/api/announcement',{});button.textContent='ประกาศแล้ว';message(result.alreadySent?'กิจกรรมนี้ประกาศแล้ว ไม่ส่งซ้ำ':'ประกาศโหวตเข้าห้องแชทแล้ว');}
-  catch(e){$('#announcementError').hidden=false;$('#announcementError').textContent=e.message;button.disabled=false;button.textContent='ประกาศโหวตเข้าห้องแชท';}
-};
+  try{const r=await api('/api/announcement',{activityId:selected.id});message(r.alreadySent?'กิจกรรมนี้ประกาศแล้ว ไม่ส่งซ้ำ':'ประกาศโหวตแล้ว');}
+  catch(e){$('#announcementError').textContent=e.message;$('#announcementError').hidden=false;}
+});
+function renderRoles(){
+  $('#roleManagement').hidden=!user?.rootAdmin;
+  $('#roleList').replaceChildren(...(data.roleMembers||[]).map(member=>{
+    const row=el('div',undefined,'role-row'),info=el('div');info.append(el('strong',member.name),el('small',member.email+' · '+member.role));row.append(info);
+    if(member.role!=='admin'){const b=el('button',member.role==='subadmin'?'ถอด Subadmin':'ตั้งเป็น Subadmin');b.onclick=()=>busy(b,async()=>{
+      const next=member.role==='subadmin'?'client':'subadmin';
+      if(!await confirmAction('เปลี่ยนสิทธิ์ผู้ดูแล',`${member.email} จะเป็น ${next} การเป็น Subadmin ทำให้บัญชีนี้โหวตไม่ได้`))return;
+      const r=await api('/api/app',{op:'setRole',email:member.email,role:next});adopt({...r,environment:data.environment,spaceName:data.spaceName});message('อัปเดตสิทธิ์แล้ว');
+    });row.append(b);}return row;
+  }));
+}
+async function loadChatStatus(){
+  if(!user?.admin)return;const s=await api('/api/chat/status');
+  $('#chatSpaceCaption').textContent=s.spaceName;$('#chatSyncStatus').textContent=s.needsSync?'ยังไม่ได้ซิงก์ห้องนี้':s.count+' คน · ซิงก์ล่าสุด '+formatVotingDate(s.syncedAt);
+  $('#syncChatMembersBtn').disabled=!s.connected;$('#chatMembersSummary').textContent='รายชื่อสมาชิก '+s.count+' คน';
+  $('#chatMemberList').replaceChildren(...s.members.map(m=>{const li=el('li',m.name);li.append(el('small',m.email));return li;}));
+}
+$('#syncChatMembersBtn').onclick=()=>busy($('#syncChatMembersBtn'),async()=>{await api('/api/chat/sync',{});await loadChatStatus();await loadData();message('ซิงก์รายชื่อสำหรับกิจกรรมใหม่แล้ว');});
 (async()=>{
-  localStorage.removeItem('voterId');localStorage.removeItem('jiraEmail');
-  try{const result=await api('/api/session');user=result.user;if(user){$('#loginBtn').textContent=user.name+' · ออกจากระบบ';$('#loginBtn').onclick=()=>{const form=document.createElement('form');form.method='POST';form.action='/auth/logout';document.body.append(form);form.submit();};$('.landing').hidden=true;$('[data-mode="admin"]').hidden=!user.admin;$('#loginStatus').textContent='เข้าสู่ระบบแล้ว: '+user.name;}}
-  catch(e){message(e.message);}
-  try{await loadData();}catch(e){$('#loadingState').hidden=true;$('#emptyState').hidden=false;$('#emptyState h1').textContent='โหลดข้อมูลไม่สำเร็จ';$('#emptyDescription').textContent='กรุณารีเฟรชหน้าเว็บเพื่อลองอีกครั้ง';$('#emptyWaiting').hidden=true;message(e.message);}
-  if(user?.admin)try{await loadChatStatus();}catch(e){$('#memberAdmin').hidden=false;$('#chatSyncError').hidden=false;$('#chatSyncError').textContent=e.message;}
-  const chatResult=new URL(location.href).searchParams.get('chat');
-  if(chatResult){
-    const notices={connected:'เชื่อมต่อ Google และซิงก์รายชื่อแล้ว',denied:'ยกเลิกการอนุญาต Google รายชื่อเดิมยังอยู่',expired:'คำขอหมดอายุ กรุณากดเชื่อมต่อ Google ใหม่',unconfigured:'ยังไม่ได้ตั้งค่าการเชื่อมต่อ Google',failed:'เชื่อมต่อไม่สำเร็จ กรุณาเลือกบัญชี Google ที่เป็นสมาชิกห้อง และอนุญาตสิทธิ์อ่านสมาชิก'};
-    if(chatResult==='connected')message(notices.connected);
-    else if(user?.admin){$('#chatSyncError').hidden=false;$('#chatSyncError').textContent=notices[chatResult]||notices.failed;}
-    const clean=new URL(location.href);clean.searchParams.delete('chat');history.replaceState(null,'',clean.pathname+clean.search+clean.hash);
-  }
+  try{await api('/api/session');await loadData();route();}catch(e){$('#initialLoading').hidden=true;error(e.message);const retry=el('button','ลองโหลดใหม่');retry.onclick=()=>location.reload();$('#pageError').append(retry);}
 })();
