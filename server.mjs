@@ -218,9 +218,12 @@ export default {
         if (!user) return json({ok:false,error:'กรุณาเข้าสู่ระบบด้วย Jira ก่อน'},401);
         const body = await req.json();
         const op=url.pathname==='/api/sheet'?(body.action==='vote'?'vote':body.action==='saveConfig'?(body.activityId?'update':'create'):''):body.op;
-        if(!['create','update','vote','close','setRole','history'].includes(op))return json({ok:false,error:'Unknown action'},400);
+        if(!['create','update','vote','close','setRole','history','reminderAdd','reminderCancel','reminderEnable','reminderDisable'].includes(op))return json({ok:false,error:'Unknown action'},400);
         // Identity and role are never accepted from browser input.
-        const payload={action:'app',op,actor:{id:user.id,email:user.email,name:user.name},activityId:body.activityId,candidateId:body.candidateId,topic:body.topic,endAt:body.endAt,awards:body.awards,email:body.email,role:body.role};
+        const payload={action:'app',op,actor:{id:user.id,email:user.email,name:user.name},activityId:body.activityId,candidateId:body.candidateId,topic:body.topic,endAt:body.endAt,awards:body.awards,email:body.email,role:body.role,sendAt:body.sendAt,reminderId:body.reminderId};
+        if(op==='reminderEnable'){
+          const mode=votingEnvironment(env);payload.environment=mode.environment;payload.spaceId=env.GOOGLE_CHAT_SPACE_ID;payload.webhook=env.GOOGLE_CHAT_WEBHOOK_URL;
+        }
         try {return json(await sheetWrite(payload,env));}catch(e){return json({ok:false,error:e.message},400);}
       }
       if (url.pathname.startsWith('/api/')) return json({error:'Not found'},404);

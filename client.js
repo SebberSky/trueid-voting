@@ -9,7 +9,7 @@ function setDeadlineFields(value) {
   const date=new Date(value),valid=value&&Number.isFinite(date.getTime()),local=valid?new Date(date.getTime()+7*3600000).toISOString():'';
   $('#adminEndDateInput').value=local.slice(0,10);$('#adminEndHour').value=valid?local.slice(11,13):'19';$('#adminEndMinute').value=valid?local.slice(14,16):'00';
 }
-for(const [id,size] of [['adminEndHour',24],['adminEndMinute',60]]){
+for(const [id,size] of [['adminEndHour',24],['adminEndMinute',60],['reminderHour',24],['reminderMinute',60]]){
   $('#'+id).replaceChildren(...Array.from({length:size},(_,i)=>{const o=document.createElement('option');o.value=String(i).padStart(2,'0');o.textContent=o.value;return o;}));
 }
 setDeadlineFields('');
@@ -26,7 +26,7 @@ async function api(path,body){
 }
 async function busy(button,action){
   if(button.disabled)return;const text=button.textContent;button.disabled=true;button.textContent='กำลังดำเนินการ…';$('#pageError').hidden=true;
-  try{await action();}catch(e){error(e.message);}finally{button.textContent=text;button.disabled=button.id==='submitVote'?!selected?.canVote:button.id==='announceVoteBtn'?selected?.status==='closed':false;}
+  try{await action();}catch(e){error(e.message);}finally{button.textContent=text;button.disabled=button.id==='submitVote'?!selected?.canVote:button.id==='announceVoteBtn'?selected?.status==='closed':false;if(button.id==='toggleReminderEngine')renderReminderEngine();}
 }
 function confirmAction(title,text){
   $('#confirmTitle').textContent=title;$('#confirmText').textContent=text;$('#confirmDialog').showModal();
@@ -66,7 +66,7 @@ function adopt(result){
   $('#roleCaption').textContent=user?({admin:'Admin',subadmin:'Subadmin',client:'Client'}[user.role]||''):'';
   $('#newActivityBtn').hidden=!user?.admin;
   document.querySelectorAll('[data-page="admin"],[data-page="members"]').forEach(b=>b.hidden=!user?.admin);
-  renderCards();renderHistory();renderRoles();
+  renderCards();renderHistory();renderRoles();renderReminderEngine();
 }
 async function loadData(){
   const id=new URL(location.href).searchParams.get('activity')||'';
@@ -85,6 +85,7 @@ function renderCards(){
 }
 function renderDetail(){
   if(!selected)return;const a=selected,closed=a.status==='closed';
+  renderReminders();
   $('#activityTitle').textContent=a.topic;$('#activityStatus').textContent=closed?'ปิดโหวตแล้ว':'เปิดโหวต';$('#activityStatus').classList.toggle('closed',closed);
   $('#activityDeadline').textContent=formatVotingDate(a.endAt);$('#completedCount').textContent=a.completed;$('#eligibleCount').textContent=a.total;$('#candidateCount').textContent=a.candidates.length;
   $('#closedBanner').hidden=!closed;
@@ -158,6 +159,49 @@ $('#announceVoteBtn').onclick=()=>busy($('#announceVoteBtn'),async()=>{
   try{const r=await api('/api/announcement',{activityId:selected.id});message(r.alreadySent?'กิจกรรมนี้ประกาศแล้ว ไม่ส่งซ้ำ':'ประกาศโหวตแล้ว');}
   catch(e){$('#announcementError').textContent=e.message;$('#announcementError').hidden=false;}
 });
+function renderReminderEngine(){
+  $('#reminderEnginePanel').hidden=!user?.admin;
+  const engine=data.reminderEngine;
+  $('#toggleReminderEngine').disabled=!engine;
+  $('#toggleReminderEngine').textContent=engine?.enabled?'พักระบบเตือน':'เปิดระบบเตือน';
+  $('#reminderEngineStatus').textContent=!engine?'ระบบเตือนยังไม่พร้อม':engine.enabled?'เปิดใช้งาน · '+(engine.lastTickAt?'ตรวจล่าสุด '+formatVotingDate(engine.lastTickAt):'รอรอบตรวจตารางแรก'):'พักการส่งข้อความเตือน';
+}
+function renderReminders(){
+  $('#activityReminders').hidden=!user?.admin;
+  const enabled=data.reminderEngine?.enabled,open=selected?.status==='open';
+  $('#reminderForm').hidden=!open||!enabled;
+  $('#reminderHelp').textContent=!open?'กิจกรรมปิดแล้ว ระบบจะไม่ส่งเตือนอีก':!enabled?'เปิดระบบเตือนด้านบนก่อนตั้งเวลา':'เพิ่มได้หลายเวลา ก่อนวันสิ้นสุด · แท็กเฉพาะสมาชิกในห้องที่ยังไม่โหวต ไม่แท็ก @all';
+  const labels={pending:'รอส่ง',partial:'ส่งแล้วบางส่วน',sending:'กำลังส่ง',sent:'ส่งแล้ว',cancelled:'ยกเลิกแล้ว',skipped:'ข้ามการส่ง',blocked:'ติดปัญหา',failed:'ส่งไม่สำเร็จ',unknown:'ยังยืนยันการส่งไม่ได้'};
+  const rows=(selected?.reminders||[]).slice().sort((a,b)=>Date.parse(a.sendAt)-Date.parse(b.sendAt));
+  $('#reminderList').replaceChildren(...rows.map(r=>{
+    const row=el('article',undefined,'history-item');row.append(el('strong',formatVotingDate(r.sendAt)),el('p',labels[r.status]||r.status,'muted'));
+    if(r.mentioned)row.append(el('p','แท็กแล้ว '+r.mentioned+' คน','muted'));
+    if(r.error)row.append(el('p',r.error,'error'));
+    if(['pending','partial'].includes(r.status)){const b=el('button','ยกเลิกเวลาเตือน');b.onclick=()=>busy(b,async()=>{
+      await reminderChange({op:'reminderCancel',reminderId:r.id});message('ยกเลิกเวลาเตือนแล้ว');
+    });row.append(b);}return row;
+  }));
+  if(!rows.length)$('#reminderList').append(el('p','ยังไม่มีเวลาเตือน','muted'));
+}
+async function reminderChange(body){
+  const id=selected?.id,r=await api('/api/app',{...body,activityId:id});
+  adopt({...r,environment:data.environment,spaceName:data.spaceName});
+  if(id){selected=data.activities.find(a=>a.id===id);renderDetail();}
+}
+$('#toggleReminderEngine').onclick=()=>busy($('#toggleReminderEngine'),async()=>{
+  const enabled=data.reminderEngine?.enabled;
+  if(enabled&&!await confirmAction('พักระบบเตือน','รายการเวลาเตือนยังอยู่ แต่จะไม่ส่งข้อความจนกว่าจะเปิดระบบอีกครั้ง'))return;
+  await reminderChange({op:enabled?'reminderDisable':'reminderEnable'});message(enabled?'พักระบบเตือนแล้ว':'เปิดระบบเตือนแล้ว');
+});
+$('#refreshReminders').onclick=()=>busy($('#refreshReminders'),loadData);
+$('#reminderForm').onsubmit=e=>{
+  e.preventDefault();busy($('#addReminder'),async()=>{
+    const time=new Date(`${$('#reminderDate').value}T${$('#reminderHour').value}:${$('#reminderMinute').value}:00+07:00`);
+    if(!Number.isFinite(time.getTime())||time.getTime()<=Date.now()||time.getTime()>=Date.parse(selected.endAt))throw Error('เวลาเตือนต้องอยู่ในอนาคตและก่อนปิดโหวต');
+    if(!await confirmAction('ตั้งเวลาแจ้งเตือน',`ส่งเข้า ${data.spaceName} วันที่ ${formatVotingDate(time.toISOString())} และแท็กเฉพาะคนที่ยังไม่โหวต`))return;
+    await reminderChange({op:'reminderAdd',sendAt:time.toISOString()});message('บันทึกเวลาเตือนแล้ว');
+  });
+};
 function renderRoles(){
   $('#roleManagement').hidden=!user?.rootAdmin;
   $('#roleList').replaceChildren(...(data.roleMembers||[]).map(member=>{

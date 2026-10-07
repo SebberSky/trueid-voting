@@ -1,141 +1,89 @@
-/** Draft only. Add beside Code.gs when ready; never run startRealVoteReminders as a test. */
-const REMINDER_SHEET = 'VoteReminders';
-const REMINDER_HEADERS = ['id','activityId','sendAt','status','mentionedIds','lastAttemptAt','sentAt','messageNames','error'];
-const REMINDER_SITE = 'https://trueid-voting.chawapon-rr.chatgpt.site/';
-const REMINDER_GRACE_MS = 10 * 60 * 1000;
-
-function reminderRows_() {
-  const ss=SpreadsheetApp.getActiveSpreadsheet();
-  ensureSheet_(ss,REMINDER_SHEET,[REMINDER_HEADERS]);
-  return ss.getSheetByName(REMINDER_SHEET).getDataRange().getValues().slice(1)
-    .filter(r=>r[0]).map(r=>Object.fromEntries(REMINDER_HEADERS.map((key,i)=>[key,r[i]||''])));
+// Multi-activity reminders. Votes and reminders share one lock at send time.
+const REMINDER_SHEET='VoteReminders';
+const REMINDER_HEADERS=['id','activityId','sendAt','status','mentionedIds','lastAttemptAt','sentAt','messageNames','error','environment','spaceId','createdBy'];
+const REMINDER_SITE='https://trueid-voting.chawapon-rr.chatgpt.site/';
+const REMINDER_GRACE_MS=10*60*1000;
+function reminderRows_(){
+  const ss=SpreadsheetApp.getActiveSpreadsheet();ensureSheet_(ss,REMINDER_SHEET,[REMINDER_HEADERS]);
+  return ss.getSheetByName(REMINDER_SHEET).getDataRange().getValues().slice(1).filter(r=>r[0]).map(r=>Object.fromEntries(REMINDER_HEADERS.map((key,i)=>[key,r[i]||''])));
 }
-function saveReminderRows_(rows) {
-  const sheet=SpreadsheetApp.getActiveSpreadsheet().getSheetByName(REMINDER_SHEET);
-  sheet.getRange(1,1,rows.length+1,REMINDER_HEADERS.length)
-    .setValues([REMINDER_HEADERS,...rows.map(row=>REMINDER_HEADERS.map(key=>row[key]||''))]);
+function saveReminderRows_(rows){
+  SpreadsheetApp.getActiveSpreadsheet().getSheetByName(REMINDER_SHEET).getRange(1,1,rows.length+1,REMINDER_HEADERS.length).setValues([REMINDER_HEADERS,...rows.map(r=>REMINDER_HEADERS.map(k=>r[k]||''))]);
 }
-function reminderEmail_(value) { return String(value||'').trim().toLowerCase(); }
-function reminderSheetRows_(name) {
-  const sheet=SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name);
-  return sheet?sheet.getDataRange().getValues().slice(1):[];
-}
-function reminderVotes_(activityId) {
-  // Existing four-column Votes belongs to the single current activity.
-  // A future multi-activity migration MUST backfill column 5 (activityId).
-  return reminderSheetRows_(SHEETS.votes).filter(r=>r[1]&&(!r[4]||String(r[4])===activityId));
-}
-function getClientVoteStatus_(body) {
-  const config=getConfig_(),id=String(body.voterId||'').trim(),email=reminderEmail_(body.voterEmail);
-  if(!id&&!email)throw Error('Authenticated voter identity required');
-  const vote=config.exists?reminderVotes_(config.activityId).find(r=>String(r[1])===id||(email&&reminderEmail_(r[3])===email)):null;
-  return {ok:true,activityId:config.activityId||'',hasVoted:Boolean(vote),votedAt:vote?new Date(vote[0]).toISOString():null};
-}
-function getReminderVoteStatus_() {
-  const config=getConfig_();
-  const candidateRows=reminderSheetRows_(SHEETS.candidates).filter(r=>r[0]);
-  const activeChat=reminderSheetRows_(SHEETS.chatMembers).filter(r=>r[2]&&String(r[3]).toUpperCase()!=='FALSE');
-  const people=new Map();
-  candidateRows.filter(r=>String(r[3]).toUpperCase()!=='FALSE').forEach(r=>{
-    const email=reminderEmail_(r[4]),key=email||String(r[0]);
-    people.set(key,{name:String(r[1]),email,candidateId:String(r[0]),chatUserId:'',hasVoted:false,votedAt:null});
-  });
-  activeChat.forEach(r=>{
-    const email=reminderEmail_(r[0]),existing=people.get(email);
-    people.set(email,{...(existing||{candidateId:String(r[2])}),name:String(r[1]),email,chatUserId:String(r[2]),hasVoted:false,votedAt:null});
-  });
-  const byId=new Map();
-  people.forEach(p=>{byId.set(p.candidateId,p);if(p.chatUserId)byId.set(p.chatUserId,p);});
-  let unresolvedVotes=0;
-  if(config.exists)reminderVotes_(config.activityId).forEach(r=>{
-    const person=people.get(reminderEmail_(r[3]))||byId.get(String(r[1]));
-    if(!person){
-      // A known departed voter does not prevent reminders to current members.
-      const known=candidateRows.some(c=>String(c[0])===String(r[1])||(r[3]&&reminderEmail_(c[4])===reminderEmail_(r[3])));
-      if(!known)unresolvedVotes++;
-      return;
-    }
-    person.hasVoted=true;person.votedAt=new Date(r[0]).toISOString();
-  });
-  const members=Array.from(people.values()),pending=members.filter(p=>!p.hasVoted);
-  return {ok:true,activityId:config.activityId||'',exists:config.exists,total:members.length,
-    voted:members.length-pending.length,pending:pending.length,unresolvedVotes,
-    missingChatId:pending.filter(p=>!/^users\/\d+$/.test(p.chatUserId)).length,members};
-}
-function saveVoteReminder_(body) {
-  const lock=LockService.getScriptLock();lock.waitLock(10000);
-  try {
-    const config=getConfig_(),time=Date.parse(String(body.sendAt||'')),endTime=Date.parse(config.endAt);
-    if(!config.exists||config.status!=='open')throw Error('No open activity');
-    if(!/(Z|[+-]\d{2}:\d{2})$/.test(String(body.sendAt||''))||!Number.isFinite(time)||!Number.isFinite(endTime)||time<=Date.now()||time>=endTime)throw Error('Use an ISO timestamp with timezone, after now and before voting ends');
-    const rows=reminderRows_();
-    if(rows.filter(r=>r.activityId===config.activityId&&['pending','partial'].includes(r.status)).length>=50)throw Error('Too many reminders');
-    if(rows.some(r=>r.activityId===config.activityId&&Date.parse(r.sendAt)===time&&r.status!=='cancelled'))throw Error('Duplicate reminder time');
-    const row={id:Utilities.getUuid(),activityId:config.activityId,sendAt:new Date(time).toISOString(),status:'pending',mentionedIds:'[]',messageNames:'[]'};
-    rows.push(row);saveReminderRows_(rows);return {ok:true,reminder:row};
-  }finally{lock.releaseLock();}
-}
-function cancelVoteReminder_(body) {
-  const lock=LockService.getScriptLock();lock.waitLock(10000);
-  try {
-    const rows=reminderRows_(),row=rows.find(r=>r.id===body.id);
-    if(!row||!['pending','partial'].includes(row.status))throw Error('Reminder cannot be cancelled');
-    row.status='cancelled';saveReminderRows_(rows);return {ok:true};
-  }finally{lock.releaseLock();}
-}
-function listVoteReminders_() {
-  return {ok:true,enabled:PropertiesService.getScriptProperties().getProperty('VOTE_REMINDERS_ENABLED')==='true',reminders:reminderRows_(),voteStatus:getReminderVoteStatus_()};
-}
-function reminderWebhook_() {
-  const url=PropertiesService.getScriptProperties().getProperty('GOOGLE_CHAT_WEBHOOK_URL')||'';
-  const mode=getVotingEnvironment_(),expected={production:'AAQASHHP1Y4',test:'AAQA0MkG6JM'}[mode.environment];
-  // Never embed credentials in source, status responses or exception messages.
-  if(!expected||mode.chatSpaceId!==expected||!url.startsWith('https://chat.googleapis.com/v1/spaces/'+expected+'/messages?')||!/[?&]key=/.test(url)||!/[?&]token=/.test(url))throw Error('Webhook secret is missing or targets another environment');
+function reminderWebhook_(mode,url){
+  const expected={test:'AAQA0MkG6JM',production:'AAQASHHP1Y4'}[mode.environment];
+  if(!expected||mode.chatSpaceId!==expected||typeof url!=='string'||!url.startsWith('https://chat.googleapis.com/v1/spaces/'+expected+'/messages?')||!/[?&]key=[^&]+/.test(url)||!/[?&]token=[^&]+/.test(url))throw Error('Webhook ไม่ตรงกับห้องและ environment');
   return url;
 }
-function startRealVoteReminders() {
-  reminderWebhook_();
+function reminderEngine_(){
   const props=PropertiesService.getScriptProperties();
-  props.setProperty('VOTE_REMINDERS_ENABLED','true');
+  return {enabled:props.getProperty('VOTE_REMINDERS_ENABLED')==='true',lastTickAt:props.getProperty('REMINDER_LAST_TICK_AT')||null};
+}
+function reminderView_(activityId){
+  return reminderRows_().filter(r=>r.activityId===activityId).map(r=>({id:r.id,sendAt:r.sendAt,status:r.status,sentAt:r.sentAt,error:r.error,mentioned:JSON.parse(r.mentionedIds||'[]').length}));
+}
+function reminderEnable_(body){
+  const mode=getVotingEnvironment_();
+  if(body.environment!==mode.environment||body.spaceId!==mode.chatSpaceId)throw Error('ห้องเปลี่ยนแล้ว กรุณารีเฟรช');
+  const url=reminderWebhook_(mode,body.webhook),props=PropertiesService.getScriptProperties();
   if(!ScriptApp.getProjectTriggers().some(t=>t.getHandlerFunction()==='runVoteReminderTick'))ScriptApp.newTrigger('runVoteReminderTick').timeBased().everyMinutes(1).create();
+  props.setProperty('REMINDER_WEBHOOK_'+mode.environment,url);props.setProperty('VOTE_REMINDERS_ENABLED','true');
+  return reminderEngine_();
 }
-function stopRealVoteReminders() {
+function reminderDisable_(){
   PropertiesService.getScriptProperties().setProperty('VOTE_REMINDERS_ENABLED','false');
-  ScriptApp.getProjectTriggers().filter(t=>t.getHandlerFunction()==='runVoteReminderTick').forEach(t=>ScriptApp.deleteTrigger(t));
+  return reminderEngine_();
 }
-function runVoteReminderTick() {
-  if(PropertiesService.getScriptProperties().getProperty('VOTE_REMINDERS_ENABLED')!=='true')return {ok:true,disabled:true};
+function saveVoteReminder_(body,activity,actor){
+  const time=Date.parse(String(body.sendAt||'')),mode=getVotingEnvironment_(),rows=reminderRows_();
+  if(!reminderEngine_().enabled)throw Error('เปิดระบบตั้งเวลาเตือนก่อน');
+  if(!activity||activity.status!=='open')throw Error('ตั้งเวลาได้เฉพาะกิจกรรมที่เปิดโหวต');
+  if(!/(Z|[+-]\d{2}:\d{2})$/.test(String(body.sendAt||''))||!Number.isFinite(time)||time<=Date.now()||time>=Date.parse(activity.endAt))throw Error('เวลาเตือนต้องอยู่ในอนาคตและก่อนปิดโหวต');
+  reminderWebhook_(mode,PropertiesService.getScriptProperties().getProperty('REMINDER_WEBHOOK_'+mode.environment));
+  if(rows.filter(r=>['pending','partial'].includes(r.status)).length>=50)throw Error('มีเวลาเตือนรอส่งครบ 50 รายการแล้ว');
+  if(rows.some(r=>r.activityId===activity.id&&Date.parse(r.sendAt)===time&&r.status!=='cancelled'))throw Error('มีเวลาเตือนนี้แล้ว');
+  rows.push({id:Utilities.getUuid(),activityId:activity.id,sendAt:new Date(time).toISOString(),status:'pending',mentionedIds:'[]',messageNames:'[]',environment:mode.environment,spaceId:mode.chatSpaceId,createdBy:actor.email});saveReminderRows_(rows);
+}
+function cancelVoteReminder_(body,activity){
+  const rows=reminderRows_(),row=rows.find(r=>r.id===body.reminderId&&r.activityId===activity?.id);
+  if(!row||!['pending','partial'].includes(row.status))throw Error('ยกเลิกได้เฉพาะรายการที่ยังรอส่ง');
+  row.status='cancelled';saveReminderRows_(rows);
+}
+function reminderPeople_(activity,ballots){
+  const stats=appStats_(activity,ballots),active=appRows_(SHEETS.chatMembers).filter(r=>r[2]&&String(r[3]).toUpperCase()!=='FALSE');
+  return stats.eligible.filter(c=>!stats.votes.some(r=>appIdentity_(c,{id:String(r[1]),email:String(r[2])}))).map(c=>{
+    const member=active.find(r=>String(r[0]).toLowerCase()===c.email||(c.chatUserId&&String(r[2])===c.chatUserId));
+    return {id:c.id,chatUserId:member?String(member[2]):''};
+  });
+}
+function runVoteReminderTick(){
+  if(!reminderEngine_().enabled)return {ok:true,disabled:true};
   const lock=LockService.getScriptLock();if(!lock.tryLock(1000))return {ok:true,busy:true};
-  try {
-    const rows=reminderRows_(),now=Date.now(),row=rows.find(r=>['pending','partial','sending'].includes(r.status)&&Date.parse(r.sendAt)<=now);
+  try{
+    appMigrate_();appRolesCache=null;
+    const props=PropertiesService.getScriptProperties(),now=Date.now(),rows=reminderRows_(),mode=getVotingEnvironment_();
+    props.setProperty('REMINDER_LAST_TICK_AT',new Date(now).toISOString());
+    const activities=appRows_('Activities').map(appActivity_),ballots=appRows_('ActivityVotes');activities.forEach(a=>appReconcile_(a,ballots));
+    for(const r of rows){
+      if(r.status==='sending'){r.status='unknown';r.error='ไม่ยืนยันการส่ง ไม่ส่งซ้ำอัตโนมัติ';continue;}
+      if(!['pending','partial'].includes(r.status))continue;
+      const a=activities.find(a=>a.id===r.activityId);
+      if(!a||a.status!=='open'||r.environment!==mode.environment||r.spaceId!==mode.chatSpaceId||Date.parse(r.sendAt)>=Date.parse(a.endAt)||now-Date.parse(r.sendAt)>REMINDER_GRACE_MS){r.status='skipped';r.error='กิจกรรมปิดแล้ว ห้องเปลี่ยน หรือเลยเวลาเตือน';}
+    }
+    saveReminderRows_(rows);
+    const row=rows.filter(r=>['pending','partial'].includes(r.status)&&Date.parse(r.sendAt)<=now).sort((a,b)=>Date.parse(a.sendAt)-Date.parse(b.sendAt))[0];
     if(!row)return {ok:true,due:false};
-    // Never retry ambiguous delivery: Chat might have accepted it before a timeout/crash.
-    if(row.status==='sending'){row.status='unknown';row.error='Delivery unconfirmed; manual review required';saveReminderRows_(rows);return {ok:false,status:row.status};}
-    const config=getConfig_();
-    if(!config.exists||config.activityId!==row.activityId||config.status!=='open'||!Number.isFinite(Date.parse(config.endAt))||Date.parse(config.endAt)<=now||now-Date.parse(row.sendAt)>REMINDER_GRACE_MS){row.status='skipped';row.error='Activity closed, changed, or reminder is too late';saveReminderRows_(rows);return {ok:true,status:row.status};}
-    // Re-read committed votes on EVERY batch while holding the same lock as voting.
-    const status=getReminderVoteStatus_();
-    if(status.unresolvedVotes){row.status='blocked';row.error='Some voter identities cannot be mapped; resolve them before tagging';saveReminderRows_(rows);return {ok:false,status:row.status};}
-    const already=new Set(JSON.parse(row.mentionedIds||'[]'));
-    const pending=status.members.filter(p=>!p.hasVoted&&/^users\/\d+$/.test(p.chatUserId)&&!already.has(p.chatUserId));
-    if(!pending.length){row.status=status.missingChatId?'blocked':'sent';row.error=status.missingChatId?'Pending voters have no active Chat ID':'';row.sentAt=new Date().toISOString();saveReminderRows_(rows);return {ok:true,status:row.status};}
-    const batch=pending.slice(0,40);
-    const topic=String(config.topic).slice(0,300).replace(/[<>]/g,'');
-    const deadline=Utilities.formatDate(new Date(config.endAt),'Asia/Bangkok','dd/MM/yyyy HH:mm');
-    const text='แจ้งเตือนโหวต: '+topic+'\n'+batch.map(p=>'<'+p.chatUserId+'>').join(' ')+'\nยังไม่มีบันทึกโหวต ณ เวลาส่ง โปรดโหวตก่อน '+deadline+' (เวลาไทย)\n'+REMINDER_SITE;
-    const webhook=reminderWebhook_();
+    const a=activities.find(a=>a.id===row.activityId),people=reminderPeople_(a,ballots),already=new Set(JSON.parse(row.mentionedIds||'[]'));
+    const pending=people.filter(p=>/^users\/\d+$/.test(p.chatUserId)&&!already.has(p.chatUserId)),missing=people.some(p=>!/^users\/\d+$/.test(p.chatUserId));
+    if(!pending.length){row.status=missing?'blocked':already.size?'sent':'skipped';row.error=missing?'ผู้ยังไม่โหวตบางคนไม่มี Chat ID ในห้องนี้':'';saveReminderRows_(rows);return {ok:true,status:row.status};}
+    const batch=pending.slice(0,40),topic=String(a.topic).slice(0,200).replace(/[<>]/g,'');
+    const text='TrueID Voting — แจ้งเตือนโหวต\n'+topic+'\n'+batch.map(p=>'<'+p.chatUserId+'>').join(' ')+'\nยังไม่โหวต ณ เวลาส่ง · สิ้นสุด '+Utilities.formatDate(new Date(a.endAt),'Asia/Bangkok','dd MMMM yyyy HH:mm')+' (เวลาไทย)\n'+REMINDER_SITE+'?activity='+encodeURIComponent(a.id)+'#vote';
+    let webhook;try{webhook=reminderWebhook_(mode,props.getProperty('REMINDER_WEBHOOK_'+mode.environment));}catch(_){row.status='blocked';row.error='Webhook ไม่ตรงกับห้อง';saveReminderRows_(rows);return {ok:false,status:row.status};}
     row.status='sending';row.lastAttemptAt=new Date().toISOString();saveReminderRows_(rows);SpreadsheetApp.flush();
-    let response;
-    try {response=UrlFetchApp.fetch(webhook,{method:'post',contentType:'application/json',payload:JSON.stringify({text}),muteHttpExceptions:true});}
-    catch (_) {row.status='unknown';row.error='Delivery unconfirmed; no automatic retry';saveReminderRows_(rows);return {ok:false,status:row.status};}
-    const code=response.getResponseCode();
-    if(code<200||code>=300){row.status=code>=500?'unknown':'failed';row.error='Chat HTTP '+code+'; no automatic retry';saveReminderRows_(rows);return {ok:false,status:row.status};}
-    let receipt;try{receipt=JSON.parse(response.getContentText());}catch(_){}
-    if(!receipt||!String(receipt.name||'').startsWith('spaces/'+config.chatSpaceId+'/messages/')){row.status='unknown';row.error='No valid Chat message receipt; no automatic retry';saveReminderRows_(rows);return {ok:false,status:row.status};}
-    row.mentionedIds=JSON.stringify([...already,...batch.map(p=>p.chatUserId)]);
-    row.messageNames=JSON.stringify([...JSON.parse(row.messageNames||'[]'),receipt.name]);
-    row.sentAt=new Date().toISOString();row.status=pending.length>batch.length?'partial':status.missingChatId?'blocked':'sent';
-    row.error=status.missingChatId?'Some pending voters have no active Chat ID':'';saveReminderRows_(rows);
-    return {ok:true,status:row.status,mentioned:batch.length};
+    let response;try{response=UrlFetchApp.fetch(webhook,{method:'post',contentType:'application/json',payload:JSON.stringify({text}),muteHttpExceptions:true});}catch(_){row.status='unknown';row.error='ไม่ยืนยันการส่ง ไม่ส่งซ้ำอัตโนมัติ';saveReminderRows_(rows);return {ok:false,status:row.status};}
+    const code=response.getResponseCode();let receipt;try{receipt=JSON.parse(response.getContentText());}catch(_){}
+    if(code<200||code>=300||!String(receipt?.name||'').startsWith('spaces/'+mode.chatSpaceId+'/messages/')){row.status=code>=400&&code<500?'failed':'unknown';row.error='Chat ส่งไม่สำเร็จหรือไม่มีใบยืนยัน ไม่ส่งซ้ำอัตโนมัติ';saveReminderRows_(rows);return {ok:false,status:row.status};}
+    row.mentionedIds=JSON.stringify([...already,...batch.map(p=>p.chatUserId)]);row.messageNames=JSON.stringify([...JSON.parse(row.messageNames||'[]'),receipt.name]);row.sentAt=new Date().toISOString();
+    row.status=pending.length>batch.length?'partial':missing?'blocked':'sent';row.error=missing?'ผู้ยังไม่โหวตบางคนไม่มี Chat ID ในห้องนี้':'';saveReminderRows_(rows);return {ok:true,status:row.status,mentioned:batch.length};
   }finally{lock.releaseLock();}
 }

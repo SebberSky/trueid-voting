@@ -10,7 +10,7 @@ function sheet(name){
 }
 const ss={getSheetByName:name=>sheets.get(name),insertSheet:sheet};
 const context=vm.createContext({SpreadsheetApp:{getActiveSpreadsheet:()=>ss},PropertiesService:{getScriptProperties:()=>({getProperty:k=>props.get(k),setProperty:(k,v)=>props.set(k,v)})},LockService:{getScriptLock:()=>({waitLock(){assert.equal(locks,0,'No nested locks');locks++;},releaseLock(){locks--;}})},ContentService:{createTextOutput:value=>({value,setMimeType(){return this;}}),MimeType:{JSON:'JSON'}},Utilities:{getUuid:randomUUID,computeHmacSha256Signature:(v,s)=>[...createHmac('sha256',s).update(v).digest()],Charset:{UTF_8:'UTF_8'}},Date,JSON});
-vm.runInContext((await readFile('Code.gs','utf8'))+'\n'+(await readFile('Activities.gs','utf8')),context);
+vm.runInContext((await readFile('Code.gs','utf8'))+'\n'+(await readFile('Activities.gs','utf8'))+'\n'+(await readFile('VoteReminders.gs','utf8')),context);
 context.setup();
 const admin={id:'admin-jira',email:'chawapon.k@muze.co.th',name:'Admin'},alice={id:'alice-jira',email:'alice@muze.co.th',name:'Alice'},bob={id:'bob-jira',email:'bob@truedigital.com',name:'Bob'},sub={id:'sub-jira',email:'sub@muze.co.th',name:'Sub'};
 for(const a of [admin,alice,bob,sub])context.registerClient_({accountId:a.id,name:a.name,email:a.email});
@@ -72,3 +72,4 @@ try{
 }finally{globalThis.fetch=savedFetch;}
 assert.equal(locks,0);
 console.log('PASS: additive/idempotent migration, isolated activities, admin/subadmin guards, self-vote and duplicate rejection, persisted own ballot/history, tie ranks, completion/manual/deadline closure, CSRF and spoofed roles, private history, activity links and mocked announcement deduplication.');
+export {context,sheets,props,app,admin,alice,bob,sub,env,request,worker};

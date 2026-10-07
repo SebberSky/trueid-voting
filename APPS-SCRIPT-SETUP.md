@@ -2,18 +2,18 @@
 
 ## Multi-activity release (7 October 2026)
 
-The deployed editor contains Code.gs followed by Activities.gs. Upload both together or as separate script files before deploying the same Web app URL. No new OAuth scopes or access changes are required.
+The deployed editor contains Code.gs, Activities.gs and VoteReminders.gs. Upload together or as separate script files before deploying the same Web app URL. Reminders additionally require `script.scriptapp` authorization for the one-minute clock trigger.
 
 - Signed `action: app` operations store Activities, ActivityVotes and Roles in additive new tabs. The first read migrates the original activity/votes idempotently; original Config, Votes and Results tabs are preserved.
 - Candidate/electorate snapshots use the latest Client/Chat list at creation. Each activity has separate ballots, deadline and awards. Refreshing a closed activity never reopens it.
 - Admin and Subadmin cannot vote. Self-votes match canonical ID or email, not display name. Every write checks current stored role under ScriptLock; browser/cookie role flags are not authority.
-- A final eligible ballot closes immediately. Deadline closure is reconciled on reads/writes; no scheduled Chat message or reminder trigger is installed.
+- A final eligible ballot closes immediately. Deadline closure is reconciled on reads/writes and reminder ticks. The reminder clock checks approximately every minute while enabled, including with the browser closed.
 - Own ballot and history are returned only for the server-authenticated actor. Public activity records exclude electorate emails and voter identities.
 - Results are counted on each read. Equal scores share competition ranks (1,1,3); zero votes do not claim a winning award.
 - Root admins manage Subadmin roles; Subadmin may create/edit/close activities, announce and sync Chat but cannot change roles. No person was promoted during deployment/testing.
 - Vote links include the immutable activity ID, and Jira login preserves that destination. Announcement deduplication is separate per activity and preserves legacy receipts.
 
-Run `node test-activities.mjs` and the existing transport-mocked suites. All webhook calls in tests are mocked. VoteReminders.gs remains an inactive legacy draft; do not enable it for the new data model.
+Run `node test-activities.mjs`, `node test-reminders.mjs` and the existing transport-mocked suites. All webhook calls in tests are mocked. Admin/Subadmin can enable/pause the reminder engine and add/cancel several one-time reminders per open activity. Queues are stored in VoteReminders. The sender reads ActivityVotes under the ballot lock immediately before each batch, excludes admins, self-containedly handles separate activities, and matches eligible users to currently active ChatMembers. Reminders tag only non-voters, not @all. Closed/stale/wrong-environment queues are skipped; uncertain delivery is never retried automatically. Webhook secrets stay in server-side Script Properties and are never returned to the browser. Old unbound draft rows are skipped, not replayed.
 
 1. Open the voting Google Sheet.
 2. Choose **Extensions → Apps Script**.

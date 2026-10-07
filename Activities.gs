@@ -80,7 +80,7 @@ function app_(body) {
     let activities=appRows_('Activities').map(appActivity_),ballots=appRows_('ActivityVotes');
     activities.forEach(a=>appReconcile_(a,ballots));
     if(!['dashboard','profile','history'].includes(op)&&!actor?.id)throw Error('กรุณาเข้าสู่ระบบก่อน');
-    if(['create','update','close','config'].includes(op)&&!manage)throw Error('ไม่มีสิทธิ์ผู้ดูแล');
+    if(['create','update','close','config','reminderAdd','reminderCancel','reminderEnable','reminderDisable'].includes(op)&&!manage)throw Error('ไม่มีสิทธิ์ผู้ดูแล');
     let a=activities.find(a=>a.id===String(body.activityId||''));
     if(op==='create'||op==='update'){
       const topic=String(body.topic||'').trim(),endAt=String(body.endAt||''),awards=Array.isArray(body.awards)?body.awards.map(String).map(x=>x.trim()).filter(Boolean):[];
@@ -116,6 +116,14 @@ function app_(body) {
       const row=[email,body.role,new Date().toISOString(),actor.email];if(index<0)sheet.appendRow(row);else sheet.getRange(index+2,1,1,4).setValues([row]);
       appRolesCache=null;
       activities.forEach(a=>appReconcile_(a,ballots));
+    }else if(op==='reminderEnable'){
+      reminderEnable_(body);
+    }else if(op==='reminderDisable'){
+      reminderDisable_();
+    }else if(op==='reminderAdd'){
+      saveVoteReminder_(body,a,actor);
+    }else if(op==='reminderCancel'){
+      cancelVoteReminder_(body,a);
     }else if(!['dashboard','profile','history','config'].includes(op))throw Error('Unknown operation');
     if(op==='config'){
       if(!a)throw Error('ไม่พบกิจกรรม');
@@ -125,6 +133,6 @@ function app_(body) {
     if(op==='profile')return {ok:true,user};
     if(op==='history'&&!actor)throw Error('กรุณาเข้าสู่ระบบก่อน');
     const history=actor?ballots.filter(r=>String(r[1])===actor.id||(actor.email&&String(r[2]).toLowerCase()===actor.email)).map(r=>({activityId:String(r[0]),topic:activities.find(a=>a.id===String(r[0]))?.topic||'กิจกรรมเดิม',candidateName:String(r[5]),votedAt:new Date(r[4]).toISOString(),status:activities.find(a=>a.id===String(r[0]))?.status||'closed'})).sort((a,b)=>Date.parse(b.votedAt)-Date.parse(a.votedAt)):[];
-    return {ok:true,user,activities:activities.map(a=>appPublic_(a,ballots,actor)).reverse(),history,selectedId:a?.id||body.activityId||'',roleMembers:role==='admin'?appRows_(SHEETS.candidates).map(r=>({id:String(r[0]),name:String(r[1]),email:String(r[4]),role:appRole_(r[4])})).filter(c=>c.email):[]};
+    return {ok:true,user,...(manage&&typeof reminderEngine_==='function'?{reminderEngine:reminderEngine_()}:{}),activities:activities.map(a=>({...appPublic_(a,ballots,actor),...(manage&&typeof reminderView_==='function'?{reminders:reminderView_(a.id)}:{})})).reverse(),history,selectedId:a?.id||body.activityId||'',roleMembers:role==='admin'?appRows_(SHEETS.candidates).map(r=>({id:String(r[0]),name:String(r[1]),email:String(r[4]),role:appRole_(r[4])})).filter(c=>c.email):[]};
   }finally{lock.releaseLock();}
 }
