@@ -1,6 +1,20 @@
 // Manual editor-only maintenance. Not exposed through doPost or the website.
 // Copies affected sheets before clearing scoped test rows; backups stay in the
 // same private spreadsheet and can be restored with normal Sheets operations.
+function demoteChawaponToClient(){
+  const lock=LockService.getScriptLock();lock.waitLock(20000);
+  try{
+    const email='chawapon.k@muze.co.th';
+    if(ROOT_ADMINS.includes(email))throw Error('Remove hard-coded root role first');
+    const ss=SpreadsheetApp.getActiveSpreadsheet();ensureSheet_(ss,'Roles',[['email','role','updatedAt','updatedBy']]);
+    const sheet=ss.getSheetByName('Roles'),rows=appRows_('Roles'),row=[email,'client',new Date().toISOString(),'manual:user-request'];
+    const indexes=rows.map((r,i)=>String(r[0]).toLowerCase()===email?i:-1).filter(i=>i>=0);
+    if(!indexes.length)sheet.appendRow(row);else indexes.forEach(i=>sheet.getRange(i+2,1,1,4).setValues([row]));
+    appRolesCache=null;SpreadsheetApp.flush();
+    if(appRole_(email)!=='client'||appRole_('kittisak.bua@truedigital.com')!=='admin')throw Error('Role verification failed');
+    console.log('Chawapon: client; Kittisak: admin. Other roles preserved.');
+  }finally{lock.releaseLock();}
+}
 function archiveTestVotingData(){
   const lock=LockService.getScriptLock();lock.waitLock(20000);
   try{

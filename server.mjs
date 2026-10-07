@@ -1,6 +1,6 @@
 const ORIGIN = 'https://trueid-voting.chawapon-rr.chatgpt.site';
 const SHEET = 'https://script.google.com/macros/s/AKfycbxOSQQdiI2e07sRRkQ7mltkTadgF4gwVMxgwpzfGyZJ33P8MzDwWw21c4Nv8ZSgl_Yi/exec';
-const ADMINS = ['chawapon.k@muze.co.th', 'kittisak.bua@truedigital.com'];
+const ADMINS = ['kittisak.bua@truedigital.com'];
 const CHAT_DOMAINS = new Set(['muze.co.th', 'truedigital.com']);
 const CHAT_CALLBACK = ORIGIN+'/oauth/google-chat/callback';
 const CHAT_SCOPE = 'https://www.googleapis.com/auth/chat.memberships.readonly';

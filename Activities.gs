@@ -1,5 +1,5 @@
 // Loaded with Code.gs. New sheets are additive: legacy Config/Votes remain intact.
-const ROOT_ADMINS = ['chawapon.k@muze.co.th','kittisak.bua@truedigital.com'];
+const ROOT_ADMINS = ['kittisak.bua@truedigital.com'];
 const ACTIVITY_HEADERS = ['id','topic','endAt','status','awards','candidates','createdAt','createdBy','closedAt','closeReason','startAt','allowAdminVote'];
 const BALLOT_HEADERS = ['activityId','voterId','voterEmail','candidateId','votedAt','candidateName','key'];
 let appRolesCache=null;
