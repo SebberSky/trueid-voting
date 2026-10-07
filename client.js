@@ -176,5 +176,5 @@ async function loadChatStatus(){
 }
 $('#syncChatMembersBtn').onclick=()=>busy($('#syncChatMembersBtn'),async()=>{await api('/api/chat/sync',{});await loadChatStatus();await loadData();message('ซิงก์รายชื่อสำหรับกิจกรรมใหม่แล้ว');});
 (async()=>{
-  try{await api('/api/session');await loadData();route();}catch(e){$('#initialLoading').hidden=true;error(e.message);const retry=el('button','ลองโหลดใหม่');retry.onclick=()=>location.reload();$('#pageError').append(retry);}
+  try{await loadData();route();}catch(e){$('#initialLoading').hidden=true;error(e.message);const retry=el('button','ลองโหลดใหม่');retry.onclick=()=>location.reload();$('#pageError').append(retry);}
 })();
