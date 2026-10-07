@@ -1,6 +1,6 @@
 // Loaded with Code.gs. New sheets are additive: legacy Config/Votes remain intact.
 const ROOT_ADMINS = ['chawapon.k@muze.co.th','kittisak.bua@truedigital.com'];
-const ACTIVITY_HEADERS = ['id','topic','endAt','status','awards','candidates','createdAt','createdBy','closedAt','closeReason'];
+const ACTIVITY_HEADERS = ['id','topic','endAt','status','awards','candidates','createdAt','createdBy','closedAt','closeReason','startAt','allowAdminVote'];
 const BALLOT_HEADERS = ['activityId','voterId','voterEmail','candidateId','votedAt','candidateName','key'];
 let appRolesCache=null;
 function appRows_(name) {
@@ -18,14 +18,15 @@ function appCandidates_() {
   return appRows_(SHEETS.candidates).filter(r=>active.has(String(r[0]))).map(r=>({id:String(r[0]),name:String(r[1]),email:String(r[4]||'').toLowerCase(),chatUserId:String(r[5]||'')}));
 }
 function appActivity_(r,index) {
-  return {id:String(r[0]),topic:String(r[1]),endAt:new Date(r[2]).toISOString(),status:String(r[3]),awards:JSON.parse(r[4]||'[]'),candidates:JSON.parse(r[5]||'[]'),createdAt:String(r[6]),createdBy:String(r[7]),closedAt:String(r[8]||''),closeReason:String(r[9]||''),row:index+2};
+  return {id:String(r[0]),topic:String(r[1]),endAt:new Date(r[2]).toISOString(),status:String(r[3]),awards:JSON.parse(r[4]||'[]'),candidates:JSON.parse(r[5]||'[]'),createdAt:String(r[6]),createdBy:String(r[7]),closedAt:String(r[8]||''),closeReason:String(r[9]||''),startAt:r[10]?new Date(r[10]).toISOString():'',allowAdminVote:r[11]===true||String(r[11]).toLowerCase()==='true',row:index+2};
 }
 function appSave_(a) {
-  SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Activities').getRange(a.row,1,1,10).setValues([[a.id,safeSheetText_(a.topic),a.endAt,a.status,JSON.stringify(a.awards),JSON.stringify(a.candidates),a.createdAt,a.createdBy,a.closedAt,a.closeReason]]);
+  SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Activities').getRange(a.row,1,1,ACTIVITY_HEADERS.length).setValues([[a.id,safeSheetText_(a.topic),a.endAt,a.status,JSON.stringify(a.awards),JSON.stringify(a.candidates),a.createdAt,a.createdBy,a.closedAt,a.closeReason,a.startAt||'',a.allowAdminVote===true]]);
 }
 function appMigrate_() {
   const ss=SpreadsheetApp.getActiveSpreadsheet(),props=PropertiesService.getScriptProperties();
   ensureSheet_(ss,'Activities',[ACTIVITY_HEADERS]);ensureSheet_(ss,'ActivityVotes',[BALLOT_HEADERS]);ensureSheet_(ss,'Roles',[['email','role','updatedAt','updatedBy']]);
+  ss.getSheetByName('Activities').getRange(1,1,1,ACTIVITY_HEADERS.length).setValues([ACTIVITY_HEADERS]);
   if(props.getProperty('ACTIVITIES_V2_MIGRATED'))return;
   const legacy=getConfig_();
   if(legacy.exists){
@@ -46,7 +47,7 @@ function appIdentity_(candidate,actor) {
 }
 function appStats_(a,ballots) {
   const votes=ballots.filter(r=>String(r[0])===a.id);
-  const eligible=a.candidates.filter(c=>appRole_(c.email)==='client');
+  const eligible=a.candidates.filter(c=>a.allowAdminVote||appRole_(c.email)==='client');
   const completed=eligible.filter(c=>votes.some(r=>appIdentity_(c,{id:String(r[1]),email:String(r[2])}))).length;
   return {votes,eligible,total:eligible.length,completed};
 }
@@ -54,10 +55,11 @@ function appClose_(a,reason) {
   a.status='closed';a.closeReason=reason;a.closedAt=reason==='deadline'?a.endAt:new Date().toISOString();appSave_(a);
 }
 function appReconcile_(a,ballots) {
-  if(a.status!=='open')return;
+  if(a.status==='closed')return;
+  if(a.status==='scheduled'&&Date.parse(a.startAt)<=Date.now()){a.status='open';appSave_(a);}
   const stats=appStats_(a,ballots);
   if(Date.parse(a.endAt)<=Date.now())appClose_(a,'deadline');
-  else if(stats.total>0&&stats.completed>=stats.total)appClose_(a,'all_voted');
+  else if(a.status==='open'&&stats.total>0&&stats.completed>=stats.total)appClose_(a,'all_voted');
 }
 function appPublic_(a,ballots,actor) {
   const stats=appStats_(a,ballots),counts={};
@@ -68,7 +70,7 @@ function appPublic_(a,ballots,actor) {
   const mine=actor?stats.votes.find(r=>String(r[1])===actor.id||(actor.email&&String(r[2]).toLowerCase()===actor.email)):null;
   const myVote=mine?{candidateId:String(mine[3]),name:String(mine[5]),votedAt:new Date(mine[4]).toISOString()}:null;
   const role=actor?appRole_(actor.email):null,eligible=actor&&stats.eligible.some(c=>appIdentity_(c,actor));
-  return {id:a.id,topic:a.topic,endAt:a.endAt,status:a.status,awards:a.awards,createdAt:a.createdAt,closedAt:a.closedAt,closeReason:a.closeReason,total:stats.total,completed:stats.completed,ballotCount:stats.votes.length,results,myVote,canVote:Boolean(eligible&&role==='client'&&!myVote&&a.status==='open'),voteBlockedReason:!actor?'login':role!=='client'?'admin':myVote?'voted':a.status!=='open'?'closed':!eligible?'ineligible':'',candidates:a.candidates.map(c=>({id:c.id,name:c.name,isSelf:appIdentity_(c,actor)}))};
+  return {id:a.id,topic:a.topic,startAt:a.startAt||'',allowAdminVote:a.allowAdminVote===true,endAt:a.endAt,status:a.status,awards:a.awards,createdAt:a.createdAt,closedAt:a.closedAt,closeReason:a.closeReason,total:stats.total,completed:stats.completed,ballotCount:stats.votes.length,results,myVote,canVote:Boolean(eligible&&(role==='client'||a.allowAdminVote)&&!myVote&&a.status==='open'),voteBlockedReason:!actor?'login':role!=='client'&&!a.allowAdminVote?'admin':myVote?'voted':a.status==='scheduled'?'scheduled':a.status!=='open'?'closed':!eligible?'ineligible':'',candidates:a.candidates.map(c=>({id:c.id,name:c.name,isSelf:appIdentity_(c,actor)}))};
 }
 function app_(body) {
   const lock=LockService.getScriptLock();lock.waitLock(20000);
@@ -85,17 +87,21 @@ function app_(body) {
     if(op==='create'||op==='update'){
       const topic=String(body.topic||'').trim(),endAt=String(body.endAt||''),awards=Array.isArray(body.awards)?body.awards.map(String).map(x=>x.trim()).filter(Boolean):[];
       if(!topic||topic.length>200||!Number.isFinite(Date.parse(endAt))||Date.parse(endAt)<=Date.now()||!awards.length||awards.length>50||awards.some(x=>x.length>200))throw Error('กรุณาระบุหัวข้อ วันสิ้นสุดในอนาคต และรางวัล 1–50 อันดับ');
+      const startAt=body.startAt===undefined?(a?.startAt||''):String(body.startAt||''),allowAdminVote=body.allowAdminVote===undefined?(a?.allowAdminVote===true):body.allowAdminVote===true;
+      if(startAt&&(!Number.isFinite(Date.parse(startAt))||Date.parse(startAt)>=Date.parse(endAt)))throw Error('เวลาเริ่มต้องอยู่ก่อนเวลาสิ้นสุด');
       if(op==='update'){
-        if(!a||a.status!=='open')throw Error('แก้ไขได้เฉพาะกิจกรรมที่ยังเปิดอยู่');
-        a.topic=topic;a.endAt=new Date(endAt).toISOString();a.awards=awards;appSave_(a);
+        if(!a||a.status==='closed')throw Error('แก้ไขได้เฉพาะกิจกรรมที่ยังเปิดอยู่หรือรอเริ่ม');
+        if(ballots.some(r=>String(r[0])===a.id)&&startAt!==a.startAt)throw Error('เปลี่ยนเวลาเริ่มไม่ได้เมื่อมีการโหวตแล้ว');
+        a.topic=topic;a.endAt=new Date(endAt).toISOString();a.awards=awards;a.startAt=startAt?new Date(startAt).toISOString():'';a.allowAdminVote=allowAdminVote;a.status=Date.parse(a.startAt)>Date.now()?'scheduled':'open';appSave_(a);appReconcile_(a,ballots);
       }else{
         const candidates=appCandidates_();
-        if(candidates.filter(c=>appRole_(c.email)==='client').length<2)throw Error('ต้องมีผู้มีสิทธิ์อย่างน้อย 2 คน เพื่อให้โหวตโดยไม่เลือกตัวเองได้');
-        a={id:Utilities.getUuid(),topic,endAt:new Date(endAt).toISOString(),status:'open',awards,candidates,createdAt:new Date().toISOString(),createdBy:actor.email,closedAt:'',closeReason:'',row:activities.length+2};
+        if(candidates.filter(c=>allowAdminVote||appRole_(c.email)==='client').length<2)throw Error('ต้องมีผู้มีสิทธิ์อย่างน้อย 2 คน เพื่อให้โหวตโดยไม่เลือกตัวเองได้');
+        a={id:Utilities.getUuid(),topic,startAt:startAt?new Date(startAt).toISOString():'',allowAdminVote,endAt:new Date(endAt).toISOString(),status:Date.parse(startAt)>Date.now()?'scheduled':'open',awards,candidates,createdAt:new Date().toISOString(),createdBy:actor.email,closedAt:'',closeReason:'',row:activities.length+2};
         appSave_(a);activities.push(a);
       }
     }else if(op==='vote'){
-      if(role!=='client')throw Error('แอดมินและ Subadmin ไม่สามารถโหวตได้');
+      if(role!=='client'&&!a?.allowAdminVote)throw Error('แอดมินและ Subadmin ไม่สามารถโหวตได้ในกิจกรรมนี้');
+      if(a?.status==='scheduled')throw Error('ยังไม่ถึงเวลาเริ่มโหวต');
       if(!a||a.status!=='open')throw Error('กิจกรรมนี้ปิดโหวตแล้ว');
       const stats=appStats_(a,ballots);
       if(!stats.eligible.some(c=>appIdentity_(c,actor)))throw Error('บัญชีนี้ไม่มีสิทธิ์ในกิจกรรมนี้');
@@ -106,7 +112,7 @@ function app_(body) {
       const vote=[a.id,actor.id,actor.email,candidate.id,new Date().toISOString(),candidate.name,Utilities.getUuid()];
       SpreadsheetApp.getActiveSpreadsheet().getSheetByName('ActivityVotes').appendRow(vote);ballots.push(vote);appReconcile_(a,ballots);
     }else if(op==='close'){
-      if(!a)throw Error('ไม่พบกิจกรรม');if(a.status==='open')appClose_(a,'manual');
+      if(!a)throw Error('ไม่พบกิจกรรม');if(a.status!=='closed')appClose_(a,'manual');
     }else if(op==='setRole'){
       if(role!=='admin')throw Error('เฉพาะแอดมินหลักเท่านั้นที่จัดการสิทธิ์ได้');
       const email=String(body.email||'').trim().toLowerCase();
@@ -127,7 +133,7 @@ function app_(body) {
     }else if(!['dashboard','profile','history','config'].includes(op))throw Error('Unknown operation');
     if(op==='config'){
       if(!a)throw Error('ไม่พบกิจกรรม');
-      return {...getVotingEnvironment_(),exists:true,activityId:a.id,topic:a.topic,endAt:a.endAt,status:a.status,awards:a.awards};
+      return {...getVotingEnvironment_(),exists:true,activityId:a.id,topic:a.topic,startAt:a.startAt,endAt:a.endAt,status:a.status,awards:a.awards};
     }
     const user=actor?{...actor,role,admin:manage,rootAdmin:role==='admin'}:null;
     if(op==='profile')return {ok:true,user};

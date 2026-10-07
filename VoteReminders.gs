@@ -37,8 +37,9 @@ function reminderDisable_(){
 function saveVoteReminder_(body,activity,actor){
   const time=Date.parse(String(body.sendAt||'')),mode=getVotingEnvironment_(),rows=reminderRows_();
   if(!reminderEngine_().enabled)throw Error('เปิดระบบตั้งเวลาเตือนก่อน');
-  if(!activity||activity.status!=='open')throw Error('ตั้งเวลาได้เฉพาะกิจกรรมที่เปิดโหวต');
+  if(!activity||activity.status==='closed')throw Error('ตั้งเวลาได้เฉพาะกิจกรรมที่เปิดโหวตหรือรอเริ่ม');
   if(!/(Z|[+-]\d{2}:\d{2})$/.test(String(body.sendAt||''))||!Number.isFinite(time)||time<=Date.now()||time>=Date.parse(activity.endAt))throw Error('เวลาเตือนต้องอยู่ในอนาคตและก่อนปิดโหวต');
+  if(activity.startAt&&time<Date.parse(activity.startAt))throw Error('เวลาเตือนต้องไม่อยู่ก่อนเวลาเริ่มโหวต');
   reminderWebhook_(mode,PropertiesService.getScriptProperties().getProperty('REMINDER_WEBHOOK_'+mode.environment));
   if(rows.filter(r=>['pending','partial'].includes(r.status)).length>=50)throw Error('มีเวลาเตือนรอส่งครบ 50 รายการแล้ว');
   if(rows.some(r=>r.activityId===activity.id&&Date.parse(r.sendAt)===time&&r.status!=='cancelled'))throw Error('มีเวลาเตือนนี้แล้ว');
@@ -57,18 +58,18 @@ function reminderPeople_(activity,ballots){
   });
 }
 function runVoteReminderTick(){
-  if(!reminderEngine_().enabled)return {ok:true,disabled:true};
   const lock=LockService.getScriptLock();if(!lock.tryLock(1000))return {ok:true,busy:true};
   try{
     appMigrate_();appRolesCache=null;
     const props=PropertiesService.getScriptProperties(),now=Date.now(),rows=reminderRows_(),mode=getVotingEnvironment_();
     props.setProperty('REMINDER_LAST_TICK_AT',new Date(now).toISOString());
     const activities=appRows_('Activities').map(appActivity_),ballots=appRows_('ActivityVotes');activities.forEach(a=>appReconcile_(a,ballots));
+    if(!reminderEngine_().enabled)return {ok:true,disabled:true};
     for(const r of rows){
       if(r.status==='sending'){r.status='unknown';r.error='ไม่ยืนยันการส่ง ไม่ส่งซ้ำอัตโนมัติ';continue;}
       if(!['pending','partial'].includes(r.status))continue;
       const a=activities.find(a=>a.id===r.activityId);
-      if(!a||a.status!=='open'||r.environment!==mode.environment||r.spaceId!==mode.chatSpaceId||Date.parse(r.sendAt)>=Date.parse(a.endAt)||now-Date.parse(r.sendAt)>REMINDER_GRACE_MS){r.status='skipped';r.error='กิจกรรมปิดแล้ว ห้องเปลี่ยน หรือเลยเวลาเตือน';}
+      if(!a||a.status==='closed'||r.environment!==mode.environment||r.spaceId!==mode.chatSpaceId||Date.parse(r.sendAt)>=Date.parse(a.endAt)||(a.startAt&&Date.parse(r.sendAt)<Date.parse(a.startAt))||now-Date.parse(r.sendAt)>REMINDER_GRACE_MS){r.status='skipped';r.error='กิจกรรมปิดแล้ว ห้องเปลี่ยน หรือเวลาเตือนไม่ตรงช่วงโหวต';}
     }
     saveReminderRows_(rows);
     const row=rows.filter(r=>['pending','partial'].includes(r.status)&&Date.parse(r.sendAt)<=now).sort((a,b)=>Date.parse(a.sendAt)-Date.parse(b.sendAt))[0];
