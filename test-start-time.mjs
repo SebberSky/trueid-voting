@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {context,sheets,props,app,admin,alice,bob,sub,env,request,worker} from './test-activities.mjs';
+context.runClosureNotificationTick_=()=>{};
 let now=Date.now();const NativeDate=Date;
 context.Date=class extends NativeDate{constructor(...args){super(...(args.length?args:[now]));}static now(){return now;}};
 const start=new Date(now+120000).toISOString(),end=new Date(now+3600000).toISOString();

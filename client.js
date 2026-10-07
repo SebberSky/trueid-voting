@@ -225,6 +225,12 @@ function renderReminders(){
     if(plan.lastStatus)$('#reminderIntervalStatus').append(el('p','ผลรอบล่าสุด: '+(labels[plan.lastStatus]||plan.lastStatus),'muted'));
     if(plan.error)$('#reminderIntervalStatus').append(el('p',plan.error,'error'));
   }else{$('#reminderIntervalStatus').append(el('p','ยังไม่เปิดเตือนซ้ำ ตั้งค่าได้ใน “แก้ไขกิจกรรม”','muted'));}
+  const notice=selected?.closureNotification;
+  if(!open){
+    const states={historical:'กิจกรรมเดิมก่อนเปิดใช้ประกาศปิด ไม่ส่งย้อนหลัง',waiting:'รอประกาศปิดอัตโนมัติ',pending:'รอประกาศปิดอัตโนมัติ',sending:'กำลังส่งประกาศปิด',sent:'ส่งประกาศปิดแล้ว',unknown:'ยังยืนยันประกาศปิดไม่ได้ ไม่ส่งซ้ำ',failed:'ส่งประกาศปิดไม่สำเร็จ',blocked:'ประกาศปิดติดปัญหา'};
+    $('#reminderIntervalStatus').append(el('p',(states[notice?.status]||'รอตรวจประกาศปิดในรอบถัดไป')+(notice?.sentAt?' · '+formatVotingDate(notice.sentAt):''),'muted'));
+    if(notice?.error)$('#reminderIntervalStatus').append(el('p',notice.error,'error'));
+  }else{$('#reminderIntervalStatus').append(el('p','ปิดโหวตแล้วจะประกาศเข้าห้องแชทอัตโนมัติ 1 ครั้ง · ตรวจประมาณทุก 1 นาที','muted'));}
   const rows=(selected?.reminders||[]).slice().sort((a,b)=>Date.parse(a.sendAt)-Date.parse(b.sendAt));
   $('#reminderList').replaceChildren(...rows.map(r=>{
     const row=el('article',undefined,'history-item');row.append(el('strong',formatVotingDate(r.sendAt)),el('p',labels[r.status]||r.status,'muted'));

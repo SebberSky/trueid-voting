@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {context,sheets,props,app,admin,alice,bob,env,request,worker} from './test-activities.mjs';
+context.runClosureNotificationTick_=()=>{};
 let now=Date.now(),held=false,deliveries=[],failure='';const NativeDate=Date;
 context.Date=class extends NativeDate{constructor(...args){super(...(args.length?args:[now]));}static now(){return now;}};
 context.LockService={getScriptLock:()=>({waitLock(){assert.equal(held,false);held=true;},tryLock(){if(held)return false;held=true;return true;},releaseLock(){held=false;}})};

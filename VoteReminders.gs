@@ -5,6 +5,50 @@ const REMINDER_PLAN_SHEET='VoteReminderIntervals';
 const REMINDER_PLAN_HEADERS=['id','activityId','intervalMinutes','nextAt','status','environment','spaceId','createdBy','updatedAt','lastStatus','lastSentAt','error'];
 const REMINDER_SITE='https://trueid-voting.chawapon-rr.chatgpt.site/';
 const REMINDER_GRACE_MS=10*60*1000;
+const CLOSURE_SHEET='VoteClosureNotifications';
+const CLOSURE_HEADERS=['activityId','status','environment','spaceId','closedAt','lastAttemptAt','sentAt','messageName','error'];
+function closureRows_(){
+  const ss=SpreadsheetApp.getActiveSpreadsheet();ensureSheet_(ss,CLOSURE_SHEET,[CLOSURE_HEADERS]);
+  return ss.getSheetByName(CLOSURE_SHEET).getDataRange().getValues().slice(1).filter(r=>r[0]).map(r=>Object.fromEntries(CLOSURE_HEADERS.map((key,i)=>[key,r[i]||''])));
+}
+function saveClosureRows_(rows){
+  SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CLOSURE_SHEET).getRange(1,1,rows.length+1,CLOSURE_HEADERS.length).setValues([CLOSURE_HEADERS,...rows.map(r=>CLOSURE_HEADERS.map(k=>r[k]||''))]);
+}
+function closureNotificationView_(id){
+  const r=closureRows_().find(r=>r.activityId===id);
+  return r?{status:r.status,sentAt:r.sentAt,error:r.error}:null;
+}
+function cancelClosedReminders_(id){
+  const rows=reminderRows_();for(const r of rows)if(r.activityId===id&&['pending','partial'].includes(r.status)){r.status='skipped';r.error='กิจกรรมปิดแล้ว';}
+  const plans=reminderPlans_();for(const p of plans)if(p.activityId===id&&p.status==='active'){p.status='closed';p.nextAt='';}
+  saveReminderRows_(rows);saveReminderPlans_(plans);
+}
+// Called under the same vote lock. Persist an attempt before transport; an
+// ambiguous response is never retried automatically (avoids duplicate posts).
+function runClosureNotificationTick_(activities,ballots,mode,now){
+  const props=PropertiesService.getScriptProperties(),rows=closureRows_();
+  let cutoff=props.getProperty('CLOSURE_NOTIFICATIONS_STARTED_AT');
+  if(!cutoff){cutoff=new Date(now).toISOString();props.setProperty('CLOSURE_NOTIFICATIONS_STARTED_AT',cutoff);}
+  for(const a of activities){
+    let r=rows.find(r=>r.activityId===a.id);
+    if(!r){r={activityId:a.id,status:a.status==='closed'&&Date.parse(a.closedAt||a.endAt)<Date.parse(cutoff)?'historical':'waiting',environment:mode.environment,spaceId:mode.chatSpaceId};rows.push(r);}
+    if(r.status==='sending'){r.status='unknown';r.error='ไม่ยืนยันการส่ง ไม่ส่งซ้ำอัตโนมัติ';}
+    if(a.status==='closed'&&r.status==='waiting'){r.status='pending';r.closedAt=a.closedAt;}
+  }
+  saveClosureRows_(rows);
+  const r=rows.find(r=>r.status==='pending');if(!r)return;
+  if(r.environment!==mode.environment||r.spaceId!==mode.chatSpaceId){r.status='blocked';r.error='ห้องเปลี่ยนแล้ว ไม่ส่งไปห้องอื่น';saveClosureRows_(rows);return;}
+  let webhook;try{webhook=reminderWebhook_(mode,props.getProperty('REMINDER_WEBHOOK_'+mode.environment));}catch(_){r.error='ยังไม่มี Webhook ที่ตรงกับห้อง';saveClosureRows_(rows);return;}
+  const a=activities.find(a=>a.id===r.activityId);if(!a||a.status!=='closed')return;
+  const reason={deadline:'ครบเวลาปิดโหวต',all_voted:'ผู้มีสิทธิ์โหวตครบแล้ว ปิดก่อนเวลา',manual:'ผู้ดูแลปิดโหวต'}[a.closeReason]||'กิจกรรมสิ้นสุดแล้ว',stats=appStats_(a,ballots);
+  const text='TrueID Voting — ปิดโหวตแล้ว\n'+String(a.topic).slice(0,200).replace(/[<>]/g,'')+'\n'+reason+'\nปิดเมื่อ '+Utilities.formatDate(new Date(a.closedAt||a.endAt),'Asia/Bangkok','dd MMMM yyyy HH:mm')+' (เวลาไทย)\nโหวตแล้ว '+stats.completed+'/'+stats.total+' คน\nดูผลโหวต: '+REMINDER_SITE+'?activity='+encodeURIComponent(a.id)+'#vote';
+  r.status='sending';r.lastAttemptAt=new Date(now).toISOString();r.error='';saveClosureRows_(rows);SpreadsheetApp.flush();
+  let response;try{response=UrlFetchApp.fetch(webhook,{method:'post',contentType:'application/json',payload:JSON.stringify({text}),muteHttpExceptions:true});}catch(_){r.status='unknown';r.error='ไม่ยืนยันการส่ง ไม่ส่งซ้ำอัตโนมัติ';saveClosureRows_(rows);return;}
+  const code=response.getResponseCode();let receipt;try{receipt=JSON.parse(response.getContentText());}catch(_){}
+  if(code<200||code>=300||!String(receipt?.name||'').startsWith('spaces/'+mode.chatSpaceId+'/messages/')){r.status=code>=400&&code<500?'failed':'unknown';r.error='Chat ส่งไม่สำเร็จหรือไม่มีใบยืนยัน ไม่ส่งซ้ำอัตโนมัติ';}
+  else{r.status='sent';r.sentAt=new Date().toISOString();r.messageName=receipt.name;}
+  saveClosureRows_(rows);
+}
 function reminderRows_(){
   const ss=SpreadsheetApp.getActiveSpreadsheet();ensureSheet_(ss,REMINDER_SHEET,[REMINDER_HEADERS]);
   return ss.getSheetByName(REMINDER_SHEET).getDataRange().getValues().slice(1).filter(r=>r[0]).map(r=>Object.fromEntries(REMINDER_HEADERS.map((key,i)=>[key,r[i]||''])));
@@ -124,9 +168,12 @@ function runVoteReminderTick(){
   const lock=LockService.getScriptLock();if(!lock.tryLock(1000))return {ok:true,busy:true};
   try{
     appMigrate_();appRolesCache=null;
-    const props=PropertiesService.getScriptProperties(),now=Date.now(),rows=reminderRows_(),mode=getVotingEnvironment_();
+    const props=PropertiesService.getScriptProperties(),now=Date.now(),mode=getVotingEnvironment_();
     props.setProperty('REMINDER_LAST_TICK_AT',new Date(now).toISOString());
     const activities=appRows_('Activities').map(appActivity_),ballots=appRows_('ActivityVotes');activities.forEach(a=>appReconcile_(a,ballots));
+    runClosureNotificationTick_(activities,ballots,mode,now);
+    // Re-read after reconciliation: closing an activity cancels its queue.
+    const rows=reminderRows_();
     if(!reminderEngine_().enabled)return {ok:true,disabled:true};
     for(const r of rows){
       if(r.status==='sending'){r.status='unknown';r.error='ไม่ยืนยันการส่ง ไม่ส่งซ้ำอัตโนมัติ';continue;}
@@ -139,6 +186,7 @@ function runVoteReminderTick(){
     const row=rows.filter(r=>['pending','partial'].includes(r.status)&&Date.parse(r.sendAt)<=now).sort((a,b)=>Date.parse(a.sendAt)-Date.parse(b.sendAt))[0];
     if(!row)return {ok:true,due:false};
     const a=activities.find(a=>a.id===row.activityId),people=reminderPeople_(a,ballots),already=new Set(JSON.parse(row.mentionedIds||'[]'));
+    if(a.status!=='open'||Date.parse(a.endAt)<=Date.now()){row.status='skipped';row.error='กิจกรรมไม่เปิดโหวตแล้ว';saveReminderRows_(rows);return {ok:true,status:row.status};}
     const pending=people.filter(p=>/^users\/\d+$/.test(p.chatUserId)&&!already.has(p.chatUserId)),missing=people.some(p=>!/^users\/\d+$/.test(p.chatUserId));
     if(!pending.length){row.status=missing?'blocked':already.size?'sent':'skipped';row.error=missing?'ผู้ยังไม่โหวตบางคนไม่มี Chat ID ในห้องนี้':'';saveReminderRows_(rows);return {ok:true,status:row.status};}
     const batch=pending.slice(0,40),topic=String(a.topic).slice(0,200).replace(/[<>]/g,'');

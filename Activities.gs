@@ -53,6 +53,7 @@ function appStats_(a,ballots) {
 }
 function appClose_(a,reason) {
   a.status='closed';a.closeReason=reason;a.closedAt=reason==='deadline'?a.endAt:new Date().toISOString();appSave_(a);
+  if(typeof cancelClosedReminders_==='function')cancelClosedReminders_(a.id);
 }
 function appReconcile_(a,ballots) {
   if(a.status==='closed')return;
@@ -152,6 +153,6 @@ function app_(body) {
     if(op==='profile')return {ok:true,user};
     if(op==='history'&&!actor)throw Error('กรุณาเข้าสู่ระบบก่อน');
     const history=actor?ballots.filter(r=>String(r[1])===actor.id||(actor.email&&String(r[2]).toLowerCase()===actor.email)).map(r=>({activityId:String(r[0]),topic:activities.find(a=>a.id===String(r[0]))?.topic||'กิจกรรมเดิม',candidateName:String(r[5]),votedAt:new Date(r[4]).toISOString(),status:activities.find(a=>a.id===String(r[0]))?.status||'closed'})).sort((a,b)=>Date.parse(b.votedAt)-Date.parse(a.votedAt)):[];
-    return {ok:true,user,...(manage&&typeof reminderEngine_==='function'?{reminderEngine:reminderEngine_()}:{}),activities:activities.map(a=>({...appPublic_(a,ballots,actor),...(manage&&typeof reminderView_==='function'?{reminders:reminderView_(a.id),reminderInterval:reminderIntervalView_(a.id)}:{})})).reverse(),history,selectedId:a?.id||body.activityId||'',roleMembers:role==='admin'?appRows_(SHEETS.candidates).map(r=>({id:String(r[0]),name:String(r[1]),email:String(r[4]),role:appRole_(r[4])})).filter(c=>c.email):[]};
+    return {ok:true,user,...(manage&&typeof reminderEngine_==='function'?{reminderEngine:reminderEngine_()}:{}),activities:activities.map(a=>({...appPublic_(a,ballots,actor),...(manage&&typeof reminderView_==='function'?{reminders:reminderView_(a.id),reminderInterval:reminderIntervalView_(a.id),closureNotification:closureNotificationView_(a.id)}:{})})).reverse(),history,selectedId:a?.id||body.activityId||'',roleMembers:role==='admin'?appRows_(SHEETS.candidates).map(r=>({id:String(r[0]),name:String(r[1]),email:String(r[4]),role:appRole_(r[4])})).filter(c=>c.email):[]};
   }finally{lock.releaseLock();}
 }

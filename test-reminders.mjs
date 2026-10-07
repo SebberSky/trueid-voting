@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import {context,sheets,props,app,admin,alice,bob,sub,env,request,worker} from './test-activities.mjs';
+// Closure transport has its own focused integration test.
+context.runClosureNotificationTick_=()=>{};
 let clockCount=0,held=false,deliveries=[],failure='';
 context.ScriptApp={getProjectTriggers:()=>clockCount?[{getHandlerFunction:()=> 'runVoteReminderTick'}]:[],newTrigger:name=>{assert.equal(name,'runVoteReminderTick');return {timeBased(){return this;},everyMinutes(n){assert.equal(n,1);return this;},create(){clockCount++;}};}};
 context.LockService={getScriptLock:()=>({waitLock(){assert.equal(held,false);held=true;},tryLock(){if(held)return false;held=true;return true;},releaseLock(){held=false;}})};
