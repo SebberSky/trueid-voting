@@ -1,6 +1,8 @@
 // Multi-activity reminders. Votes and reminders share one lock at send time.
 const REMINDER_SHEET='VoteReminders';
-const REMINDER_HEADERS=['id','activityId','sendAt','status','mentionedIds','lastAttemptAt','sentAt','messageNames','error','environment','spaceId','createdBy'];
+const REMINDER_HEADERS=['id','activityId','sendAt','status','mentionedIds','lastAttemptAt','sentAt','messageNames','error','environment','spaceId','createdBy','planId'];
+const REMINDER_PLAN_SHEET='VoteReminderIntervals';
+const REMINDER_PLAN_HEADERS=['id','activityId','intervalMinutes','nextAt','status','environment','spaceId','createdBy','updatedAt','lastStatus','lastSentAt','error'];
 const REMINDER_SITE='https://trueid-voting.chawapon-rr.chatgpt.site/';
 const REMINDER_GRACE_MS=10*60*1000;
 function reminderRows_(){
@@ -18,6 +20,67 @@ function reminderWebhook_(mode,url){
 function reminderEngine_(){
   const props=PropertiesService.getScriptProperties();
   return {enabled:props.getProperty('VOTE_REMINDERS_ENABLED')==='true',lastTickAt:props.getProperty('REMINDER_LAST_TICK_AT')||null};
+}
+function reminderPlans_(){
+  const ss=SpreadsheetApp.getActiveSpreadsheet();ensureSheet_(ss,REMINDER_PLAN_SHEET,[REMINDER_PLAN_HEADERS]);
+  return ss.getSheetByName(REMINDER_PLAN_SHEET).getDataRange().getValues().slice(1).filter(r=>r[0]).map(r=>Object.fromEntries(REMINDER_PLAN_HEADERS.map((key,i)=>[key,r[i]||''])));
+}
+function saveReminderPlans_(plans){
+  SpreadsheetApp.getActiveSpreadsheet().getSheetByName(REMINDER_PLAN_SHEET).getRange(1,1,plans.length+1,REMINDER_PLAN_HEADERS.length).setValues([REMINDER_PLAN_HEADERS,...plans.map(p=>REMINDER_PLAN_HEADERS.map(k=>p[k]||''))]);
+}
+function reminderIntervalView_(activityId){
+  const p=reminderPlans_().find(p=>p.activityId===activityId);
+  const own=p?reminderRows_().filter(r=>r.planId===p.id):[],last=own[own.length-1];
+  if(last){p.lastStatus=last.status;p.lastSentAt=last.sentAt||p.lastSentAt;p.error=last.error||p.error;}
+  return p?{intervalMinutes:Number(p.intervalMinutes),nextAt:p.nextAt,status:p.status,lastStatus:p.lastStatus,lastSentAt:p.lastSentAt,error:p.error}:null;
+}
+function validateReminderInterval_(minutes,activity){
+  const mode=getVotingEnvironment_();
+  if(!reminderEngine_().enabled)throw Error('เปิดระบบเตือนก่อน');
+  if(!activity||activity.status==='closed')throw Error('กิจกรรมนี้ปิดโหวตแล้ว');
+  if(!Number.isInteger(minutes)||minutes<1||minutes>10080)throw Error('ช่วงเตือนต้องเป็น 1–10080 นาที (ไม่เกิน 7 วัน)');
+  const next=Math.max(Date.now(),Date.parse(activity.startAt)||0)+minutes*60000;
+  if(next>=Date.parse(activity.endAt))throw Error('ช่วงเตือนยาวเกินเวลาที่เหลือก่อนปิดโหวต');
+  reminderWebhook_(mode,PropertiesService.getScriptProperties().getProperty('REMINDER_WEBHOOK_'+mode.environment));
+  return next;
+}
+function saveReminderInterval_(body,activity,actor){
+  const minutes=Number(body.intervalMinutes),mode=getVotingEnvironment_(),plans=reminderPlans_(),rows=reminderRows_(),next=validateReminderInterval_(minutes,activity);
+  let p=plans.find(p=>p.activityId===activity.id);
+  if(!p){p={id:Utilities.getUuid(),activityId:activity.id};plans.push(p);}
+  // Replacing a cadence cancels unsent work, never discards past receipts.
+  for(const r of rows)if(r.activityId===activity.id&&['pending','partial'].includes(r.status))r.status='cancelled';
+  Object.assign(p,{id:Utilities.getUuid(),intervalMinutes:minutes,nextAt:new Date(next).toISOString(),status:'active',environment:mode.environment,spaceId:mode.chatSpaceId,createdBy:actor.email,updatedAt:new Date().toISOString(),lastStatus:'',lastSentAt:'',error:''});
+  saveReminderRows_(rows);saveReminderPlans_(plans);
+}
+function stopReminderInterval_(activity){
+  const plans=reminderPlans_(),p=plans.find(p=>p.activityId===activity?.id);
+  if(!p)throw Error('ยังไม่มีการตั้งเตือนซ้ำ');
+  p.status='stopped';p.nextAt='';p.updatedAt=new Date().toISOString();
+  const rows=reminderRows_();for(const r of rows)if(r.planId===p.id&&['pending','partial'].includes(r.status))r.status='cancelled';
+  saveReminderRows_(rows);saveReminderPlans_(plans);
+}
+function queueReminderIntervals_(activities,rows,mode,now){
+  const plans=reminderPlans_();
+  for(const p of plans){
+    if(p.status!=='active')continue;
+    const a=activities.find(a=>a.id===p.activityId);
+    if(!a||a.status==='closed'){p.status='closed';p.nextAt='';continue;}
+    if(p.environment!==mode.environment||p.spaceId!==mode.chatSpaceId){p.status='blocked';p.error='ห้องเปลี่ยนแล้ว กรุณาบันทึกช่วงเตือนใหม่';continue;}
+    const own=rows.filter(r=>r.planId===p.id),last=own[own.length-1];
+    if(last){p.lastStatus=last.status;p.lastSentAt=last.sentAt||p.lastSentAt;p.error=last.error||'';}
+    if(own.some(r=>['unknown','failed','blocked'].includes(r.status))){p.status='blocked';p.nextAt='';continue;}
+    if(own.some(r=>['pending','partial','sending'].includes(r.status)))continue;
+    const interval=Number(p.intervalMinutes)*60000,start=Date.parse(a.startAt)||0;
+    if(Date.parse(p.nextAt)<start+interval)p.nextAt=new Date(start+interval).toISOString();
+    const due=Date.parse(p.nextAt);
+    if(due>=Date.parse(a.endAt)){p.status='finished';p.nextAt='';continue;}
+    if(!Number.isFinite(due)||due>now||a.status!=='open')continue;
+    if(now-due>REMINDER_GRACE_MS){p.lastStatus='skipped';p.error='ข้ามรอบที่เลยเวลานาน ไม่ส่งข้อความย้อนหลังติดกัน';p.nextAt=new Date(now+interval).toISOString();continue;}
+    rows.push({id:Utilities.getUuid(),activityId:a.id,sendAt:new Date(due).toISOString(),status:'pending',mentionedIds:'[]',messageNames:'[]',environment:mode.environment,spaceId:mode.chatSpaceId,createdBy:p.createdBy,planId:p.id});
+    p.nextAt=new Date(now+interval).toISOString();
+  }
+  saveReminderPlans_(plans);
 }
 function reminderView_(activityId){
   return reminderRows_().filter(r=>r.activityId===activityId).map(r=>({id:r.id,sendAt:r.sendAt,status:r.status,sentAt:r.sentAt,error:r.error,mentioned:JSON.parse(r.mentionedIds||'[]').length}));
@@ -71,6 +134,7 @@ function runVoteReminderTick(){
       const a=activities.find(a=>a.id===r.activityId);
       if(!a||a.status==='closed'||r.environment!==mode.environment||r.spaceId!==mode.chatSpaceId||Date.parse(r.sendAt)>=Date.parse(a.endAt)||(a.startAt&&Date.parse(r.sendAt)<Date.parse(a.startAt))||now-Date.parse(r.sendAt)>REMINDER_GRACE_MS){r.status='skipped';r.error='กิจกรรมปิดแล้ว ห้องเปลี่ยน หรือเวลาเตือนไม่ตรงช่วงโหวต';}
     }
+    queueReminderIntervals_(activities,rows,mode,now);
     saveReminderRows_(rows);
     const row=rows.filter(r=>['pending','partial'].includes(r.status)&&Date.parse(r.sendAt)<=now).sort((a,b)=>Date.parse(a.sendAt)-Date.parse(b.sendAt))[0];
     if(!row)return {ok:true,due:false};

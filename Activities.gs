@@ -82,13 +82,17 @@ function app_(body) {
     let activities=appRows_('Activities').map(appActivity_),ballots=appRows_('ActivityVotes');
     activities.forEach(a=>appReconcile_(a,ballots));
     if(!['dashboard','profile','history'].includes(op)&&!actor?.id)throw Error('กรุณาเข้าสู่ระบบก่อน');
-    if(['create','update','close','config','reminderAdd','reminderCancel','reminderEnable','reminderDisable'].includes(op)&&!manage)throw Error('ไม่มีสิทธิ์ผู้ดูแล');
+    if(['create','update','close','config','reminderAdd','reminderCancel','reminderEnable','reminderDisable','reminderInterval','reminderStop'].includes(op)&&!manage)throw Error('ไม่มีสิทธิ์ผู้ดูแล');
     let a=activities.find(a=>a.id===String(body.activityId||''));
     if(op==='create'||op==='update'){
       const topic=String(body.topic||'').trim(),endAt=String(body.endAt||''),awards=Array.isArray(body.awards)?body.awards.map(String).map(x=>x.trim()).filter(Boolean):[];
       if(!topic||topic.length>200||!Number.isFinite(Date.parse(endAt))||Date.parse(endAt)<=Date.now()||!awards.length||awards.length>50||awards.some(x=>x.length>200))throw Error('กรุณาระบุหัวข้อ วันสิ้นสุดในอนาคต และรางวัล 1–50 อันดับ');
       const startAt=body.startAt===undefined?(a?.startAt||''):String(body.startAt||''),allowAdminVote=body.allowAdminVote===undefined?(a?.allowAdminVote===true):body.allowAdminVote===true;
       if(startAt&&(!Number.isFinite(Date.parse(startAt))||Date.parse(startAt)>=Date.parse(endAt)))throw Error('เวลาเริ่มต้องอยู่ก่อนเวลาสิ้นสุด');
+      const reminderMinutes=body.reminderIntervalMinutes===undefined?undefined:Number(body.reminderIntervalMinutes),plan=reminderMinutes===undefined?null:reminderPlans_().find(p=>p.activityId===a?.id);
+      if(reminderMinutes!==undefined&&(!Number.isInteger(reminderMinutes)||reminderMinutes<0||reminderMinutes>10080))throw Error('ช่วงเตือนต้องเป็นจำนวนเต็ม 1 นาที ถึง 7 วัน หรือ 0 เพื่อปิด');
+      const changeReminder=reminderMinutes>0&&(plan?.status!=='active'||Number(plan.intervalMinutes)!==reminderMinutes);
+      if(changeReminder)validateReminderInterval_(reminderMinutes,{startAt,endAt,status:'open'});
       if(op==='update'){
         if(!a||a.status==='closed')throw Error('แก้ไขได้เฉพาะกิจกรรมที่ยังเปิดอยู่หรือรอเริ่ม');
         if(ballots.some(r=>String(r[0])===a.id)&&startAt!==a.startAt)throw Error('เปลี่ยนเวลาเริ่มไม่ได้เมื่อมีการโหวตแล้ว');
@@ -99,6 +103,8 @@ function app_(body) {
         a={id:Utilities.getUuid(),topic,startAt:startAt?new Date(startAt).toISOString():'',allowAdminVote,endAt:new Date(endAt).toISOString(),status:Date.parse(startAt)>Date.now()?'scheduled':'open',awards,candidates,createdAt:new Date().toISOString(),createdBy:actor.email,closedAt:'',closeReason:'',row:activities.length+2};
         appSave_(a);activities.push(a);
       }
+      if(changeReminder&&a.status!=='closed')saveReminderInterval_({intervalMinutes:reminderMinutes},a,actor);
+      if(reminderMinutes===0&&plan)stopReminderInterval_(a);
     }else if(op==='vote'){
       if(role!=='client'&&!a?.allowAdminVote)throw Error('แอดมินและ Subadmin ไม่สามารถโหวตได้ในกิจกรรมนี้');
       if(a?.status==='scheduled')throw Error('ยังไม่ถึงเวลาเริ่มโหวต');
@@ -130,6 +136,10 @@ function app_(body) {
       saveVoteReminder_(body,a,actor);
     }else if(op==='reminderCancel'){
       cancelVoteReminder_(body,a);
+    }else if(op==='reminderInterval'){
+      saveReminderInterval_(body,a,actor);
+    }else if(op==='reminderStop'){
+      stopReminderInterval_(a);
     }else if(!['dashboard','profile','history','config'].includes(op))throw Error('Unknown operation');
     if(op==='config'){
       if(!a)throw Error('ไม่พบกิจกรรม');
@@ -139,6 +149,6 @@ function app_(body) {
     if(op==='profile')return {ok:true,user};
     if(op==='history'&&!actor)throw Error('กรุณาเข้าสู่ระบบก่อน');
     const history=actor?ballots.filter(r=>String(r[1])===actor.id||(actor.email&&String(r[2]).toLowerCase()===actor.email)).map(r=>({activityId:String(r[0]),topic:activities.find(a=>a.id===String(r[0]))?.topic||'กิจกรรมเดิม',candidateName:String(r[5]),votedAt:new Date(r[4]).toISOString(),status:activities.find(a=>a.id===String(r[0]))?.status||'closed'})).sort((a,b)=>Date.parse(b.votedAt)-Date.parse(a.votedAt)):[];
-    return {ok:true,user,...(manage&&typeof reminderEngine_==='function'?{reminderEngine:reminderEngine_()}:{}),activities:activities.map(a=>({...appPublic_(a,ballots,actor),...(manage&&typeof reminderView_==='function'?{reminders:reminderView_(a.id)}:{})})).reverse(),history,selectedId:a?.id||body.activityId||'',roleMembers:role==='admin'?appRows_(SHEETS.candidates).map(r=>({id:String(r[0]),name:String(r[1]),email:String(r[4]),role:appRole_(r[4])})).filter(c=>c.email):[]};
+    return {ok:true,user,...(manage&&typeof reminderEngine_==='function'?{reminderEngine:reminderEngine_()}:{}),activities:activities.map(a=>({...appPublic_(a,ballots,actor),...(manage&&typeof reminderView_==='function'?{reminders:reminderView_(a.id),reminderInterval:reminderIntervalView_(a.id)}:{})})).reverse(),history,selectedId:a?.id||body.activityId||'',roleMembers:role==='admin'?appRows_(SHEETS.candidates).map(r=>({id:String(r[0]),name:String(r[1]),email:String(r[4]),role:appRole_(r[4])})).filter(c=>c.email):[]};
   }finally{lock.releaseLock();}
 }

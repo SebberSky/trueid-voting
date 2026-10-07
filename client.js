@@ -9,7 +9,7 @@ function setDeadlineFields(value) {
   const date=new Date(value),valid=value&&Number.isFinite(date.getTime()),local=valid?new Date(date.getTime()+7*3600000).toISOString():'';
   $('#adminEndDateInput').value=local.slice(0,10);$('#adminEndHour').value=valid?local.slice(11,13):'19';$('#adminEndMinute').value=valid?local.slice(14,16):'00';
 }
-for(const [id,size] of [['adminEndHour',24],['adminEndMinute',60],['adminStartHour',24],['adminStartMinute',60],['reminderHour',24],['reminderMinute',60]]){
+for(const [id,size] of [['adminEndHour',24],['adminEndMinute',60],['adminStartHour',24],['adminStartMinute',60]]){
   $('#'+id).replaceChildren(...Array.from({length:size},(_,i)=>{const o=document.createElement('option');o.value=String(i).padStart(2,'0');o.textContent=o.value;return o;}));
 }
 setDeadlineFields('');
@@ -125,8 +125,17 @@ function openForm(activity){
   $('#adminTopicInput').value=activity?.topic||'';$('#adminAwards').value=(activity?.awards||[]).join('\n');
   setDeadlineFields(activity?.endAt||'');setStartFields(activity?.startAt||'');$('#allowAdminVote').checked=activity?.allowAdminVote===true;
   const hasVotes=Boolean(activity?.ballotCount);for(const id of ['adminStartDateInput','adminStartHour','adminStartMinute','startImmediately'])$('#'+id).disabled=hasVotes;
+  const plan=activity?.reminderInterval,unit=plan?.intervalMinutes%60===0?'hours':'minutes';
+  $('#enableActivityReminders').checked=plan?.status==='active';$('#reminderEvery').value=plan?(unit==='hours'?plan.intervalMinutes/60:plan.intervalMinutes):30;$('#reminderUnit').value=unit;
+  renderReminderFields();
   $('#adminTopicInput').focus();
 }
+function renderReminderFields(){
+  const enabled=$('#enableActivityReminders').checked;
+  $('#reminderIntervalFields').hidden=!enabled;$('#reminderEvery').disabled=!enabled;$('#reminderUnit').disabled=!enabled;
+  $('#adminReminderHint').textContent=data.reminderEngine?.enabled?'รอบแรกหลังบันทึกหรือเริ่มโหวตครบช่วงที่ตั้ง · แท็กเฉพาะคนที่ยังไม่โหวต · หยุดเมื่อกิจกรรมปิด':'ระบบเตือนพักอยู่ เปิดระบบเตือนก่อนบันทึกช่วงใหม่';
+}
+$('#enableActivityReminders').onchange=renderReminderFields;
 $('#startImmediately').onclick=()=>setStartFields('');
 $('#newActivityBtn').onclick=()=>navigate('admin');
 $('#cancelForm').onclick=()=>editing?navigate('detail',editing):navigate('activities');
@@ -142,7 +151,9 @@ $('#activityForm').onsubmit=e=>{
     if(!Number.isFinite(endAt.getTime())||endAt.getTime()<=Date.now())throw Error('กำหนดวันสิ้นสุดในอนาคต');
     const startAt=$('#adminStartDateInput').value?new Date(`${$('#adminStartDateInput').value}T${$('#adminStartHour').value}:${$('#adminStartMinute').value}:00+07:00`):null;
     if(startAt&&(!Number.isFinite(startAt.getTime())||startAt>=endAt))throw Error('เวลาเริ่มต้องอยู่ก่อนเวลาสิ้นสุด');
-    const r=await api('/api/app',{op:editing?'update':'create',activityId:editing,topic:$('#adminTopicInput').value.trim(),startAt:startAt?.toISOString()||'',allowAdminVote:$('#allowAdminVote').checked,endAt:endAt.toISOString(),awards:$('#adminAwards').value.split('\n').map(x=>x.trim()).filter(Boolean)});
+    const every=Number($('#reminderEvery').value),reminderIntervalMinutes=$('#enableActivityReminders').checked?every*($('#reminderUnit').value==='hours'?60:1):0;
+    if(reminderIntervalMinutes&&(!Number.isInteger(every)||every<1||reminderIntervalMinutes>10080))throw Error('เลือกช่วงเตือนตั้งแต่ 1 นาที ถึง 7 วัน');
+    const r=await api('/api/app',{op:editing?'update':'create',activityId:editing,topic:$('#adminTopicInput').value.trim(),startAt:startAt?.toISOString()||'',allowAdminVote:$('#allowAdminVote').checked,endAt:endAt.toISOString(),awards:$('#adminAwards').value.split('\n').map(x=>x.trim()).filter(Boolean),reminderIntervalMinutes});
     adopt({...r,environment:data.environment,spaceName:data.spaceName});navigate('detail',r.selectedId);message(editing?'บันทึกแล้ว':'สร้างโหวตแล้ว');
   });
 };
@@ -178,10 +189,19 @@ function renderReminderEngine(){
 }
 function renderReminders(){
   $('#activityReminders').hidden=!user?.admin;
-  const enabled=data.reminderEngine?.enabled,open=selected?.status==='open';
-  $('#reminderForm').hidden=!open||!enabled;
-  $('#reminderHelp').textContent=!open?'กิจกรรมปิดแล้ว ระบบจะไม่ส่งเตือนอีก':!enabled?'เปิดระบบเตือนด้านบนก่อนตั้งเวลา':'เพิ่มได้หลายเวลา ก่อนวันสิ้นสุด · แท็กเฉพาะสมาชิกในห้องที่ยังไม่โหวต ไม่แท็ก @all';
+  const enabled=data.reminderEngine?.enabled,open=['open','scheduled'].includes(selected?.status),plan=selected?.reminderInterval;
+  $('#reminderHelp').textContent=!open?'กิจกรรมปิดแล้ว ระบบจะไม่ส่งเตือนอีก':!enabled?'เปิดระบบเตือนด้านบนก่อน':'เปลี่ยนช่วงเตือนได้ใน “แก้ไขกิจกรรม” · แท็กเฉพาะคนที่ยังไม่โหวต · ตรวจประมาณทุก 1 นาที';
   const labels={pending:'รอส่ง',partial:'ส่งแล้วบางส่วน',sending:'กำลังส่ง',sent:'ส่งแล้ว',cancelled:'ยกเลิกแล้ว',skipped:'ข้ามการส่ง',blocked:'ติดปัญหา',failed:'ส่งไม่สำเร็จ',unknown:'ยังยืนยันการส่งไม่ได้'};
+  $('#reminderIntervalStatus').replaceChildren();
+  if(plan){
+    const unit=plan.intervalMinutes%60===0?'hours':'minutes',value=unit==='hours'?plan.intervalMinutes/60:plan.intervalMinutes;
+    const state={active:enabled?'เปิดเตือนซ้ำ':'พักตามระบบเตือน',stopped:'หยุดเตือนแล้ว',closed:'กิจกรรมปิดแล้ว',finished:'ไม่มีรอบเตือนก่อนปิดโหวต',blocked:'หยุดส่งเนื่องจากปัญหา'};
+    $('#reminderIntervalStatus').append(el('strong',`${state[plan.status]||plan.status} · ทุก ${value} ${unit==='hours'?'ชั่วโมง':'นาที'}`));
+    if(plan.status==='active'&&plan.nextAt)$('#reminderIntervalStatus').append(el('p','รอบถัดไป '+formatVotingDate(plan.nextAt),'muted'));
+    if(plan.lastSentAt)$('#reminderIntervalStatus').append(el('p','ส่งล่าสุด '+formatVotingDate(plan.lastSentAt),'muted'));
+    if(plan.lastStatus)$('#reminderIntervalStatus').append(el('p','ผลรอบล่าสุด: '+(labels[plan.lastStatus]||plan.lastStatus),'muted'));
+    if(plan.error)$('#reminderIntervalStatus').append(el('p',plan.error,'error'));
+  }else{$('#reminderIntervalStatus').append(el('p','ยังไม่เปิดเตือนซ้ำ ตั้งค่าได้ใน “แก้ไขกิจกรรม”','muted'));}
   const rows=(selected?.reminders||[]).slice().sort((a,b)=>Date.parse(a.sendAt)-Date.parse(b.sendAt));
   $('#reminderList').replaceChildren(...rows.map(r=>{
     const row=el('article',undefined,'history-item');row.append(el('strong',formatVotingDate(r.sendAt)),el('p',labels[r.status]||r.status,'muted'));
@@ -191,7 +211,7 @@ function renderReminders(){
       await reminderChange({op:'reminderCancel',reminderId:r.id});message('ยกเลิกเวลาเตือนแล้ว');
     });row.append(b);}return row;
   }));
-  if(!rows.length)$('#reminderList').append(el('p','ยังไม่มีเวลาเตือน','muted'));
+  if(!rows.length)$('#reminderList').append(el('p','ยังไม่มีประวัติการส่ง','muted'));
 }
 async function reminderChange(body){
   const id=selected?.id,r=await api('/api/app',{...body,activityId:id});
@@ -204,14 +224,6 @@ $('#toggleReminderEngine').onclick=()=>busy($('#toggleReminderEngine'),async()=>
   await reminderChange({op:enabled?'reminderDisable':'reminderEnable'});message(enabled?'พักระบบเตือนแล้ว':'เปิดระบบเตือนแล้ว');
 });
 $('#refreshReminders').onclick=()=>busy($('#refreshReminders'),loadData);
-$('#reminderForm').onsubmit=e=>{
-  e.preventDefault();busy($('#addReminder'),async()=>{
-    const time=new Date(`${$('#reminderDate').value}T${$('#reminderHour').value}:${$('#reminderMinute').value}:00+07:00`);
-    if(!Number.isFinite(time.getTime())||time.getTime()<=Date.now()||time.getTime()>=Date.parse(selected.endAt))throw Error('เวลาเตือนต้องอยู่ในอนาคตและก่อนปิดโหวต');
-    if(!await confirmAction('ตั้งเวลาแจ้งเตือน',`ส่งเข้า ${data.spaceName} วันที่ ${formatVotingDate(time.toISOString())} และแท็กเฉพาะคนที่ยังไม่โหวต`))return;
-    await reminderChange({op:'reminderAdd',sendAt:time.toISOString()});message('บันทึกเวลาเตือนแล้ว');
-  });
-};
 function renderRoles(){
   $('#roleManagement').hidden=!user?.rootAdmin;
   $('#roleManagement .muted').textContent='Subadmin จัดการกิจกรรม สมาชิก และประกาศได้ แต่เปลี่ยนสิทธิ์ผู้ดูแลไม่ได้ โหวตได้เฉพาะกิจกรรมที่อนุญาตผู้ดูแล';
