@@ -89,12 +89,15 @@ function app_(body) {
       if(!topic||topic.length>200||!Number.isFinite(Date.parse(endAt))||Date.parse(endAt)<=Date.now()||!awards.length||awards.length>50||awards.some(x=>x.length>200))throw Error('กรุณาระบุหัวข้อ วันสิ้นสุดในอนาคต และรางวัล 1–50 อันดับ');
       const startAt=body.startAt===undefined?(a?.startAt||''):String(body.startAt||''),allowAdminVote=body.allowAdminVote===undefined?(a?.allowAdminVote===true):body.allowAdminVote===true;
       if(startAt&&(!Number.isFinite(Date.parse(startAt))||Date.parse(startAt)>=Date.parse(endAt)))throw Error('เวลาเริ่มต้องอยู่ก่อนเวลาสิ้นสุด');
+      const startChanged=op==='create'||(startAt?new Date(startAt).toISOString():'')!==(a?.startAt||'');
+      if(startChanged&&startAt&&Date.parse(startAt)<=Date.now())throw Error('เวลาเริ่มต้องอยู่ในอนาคต ไม่สามารถกำหนดย้อนหลังได้');
       const reminderMinutes=body.reminderIntervalMinutes===undefined?undefined:Number(body.reminderIntervalMinutes),plan=reminderMinutes===undefined?null:reminderPlans_().find(p=>p.activityId===a?.id);
       if(reminderMinutes!==undefined&&(!Number.isInteger(reminderMinutes)||reminderMinutes<0||reminderMinutes>10080))throw Error('ช่วงเตือนต้องเป็นจำนวนเต็ม 1 นาที ถึง 7 วัน หรือ 0 เพื่อปิด');
       const changeReminder=reminderMinutes>0&&(plan?.status!=='active'||Number(plan.intervalMinutes)!==reminderMinutes);
       if(changeReminder)validateReminderInterval_(reminderMinutes,{startAt,endAt,status:'open'});
       if(op==='update'){
         if(!a||a.status==='closed')throw Error('แก้ไขได้เฉพาะกิจกรรมที่ยังเปิดอยู่หรือรอเริ่ม');
+        if(a.status==='open'&&startChanged)throw Error('กิจกรรมเริ่มแล้ว เปลี่ยนเวลาเริ่มไม่ได้');
         if(ballots.some(r=>String(r[0])===a.id)&&startAt!==a.startAt)throw Error('เปลี่ยนเวลาเริ่มไม่ได้เมื่อมีการโหวตแล้ว');
         a.topic=topic;a.endAt=new Date(endAt).toISOString();a.awards=awards;a.startAt=startAt?new Date(startAt).toISOString():'';a.allowAdminVote=allowAdminVote;a.status=Date.parse(a.startAt)>Date.now()?'scheduled':'open';appSave_(a);appReconcile_(a,ballots);
       }else{

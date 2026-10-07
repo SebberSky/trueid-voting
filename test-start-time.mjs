@@ -9,6 +9,12 @@ assert.equal(a.status,'scheduled');assert.equal(a.allowAdminVote,true);assert.eq
 assert.throws(()=>app('vote',alice,{activityId:id,candidateId:bob.id}),/เวลาเริ่ม/);
 assert.throws(()=>app('vote',admin,{activityId:id,candidateId:bob.id}),/เวลาเริ่ม/);
 assert.throws(()=>create({startAt:end}),/เวลาเริ่ม/);assert.throws(()=>create({startAt:'invalid'}),/เวลาเริ่ม/);
+assert.throws(()=>create({startAt:new Date(now-60000).toISOString()}),/ย้อนหลัง/);
+assert.throws(()=>create({startAt:new Date(now).toISOString()}),/ย้อนหลัง/);
+const immediate=create({startAt:''}).selectedId;
+assert.equal(app('dashboard',admin).activities.find(a=>a.id===immediate).status,'open','Default is immediate with no scheduled timestamp');
+assert.throws(()=>app('update',admin,{activityId:immediate,topic:'No reschedule',startAt:start,endAt:end,awards:['x']}),/กิจกรรมเริ่มแล้ว/);
+assert.throws(()=>app('update',admin,{activityId:id,topic:'No backdate',startAt:new Date(now-60000).toISOString(),endAt:end,awards:['x']}),/ย้อนหลัง/);
 now+=120000;
 d=app('dashboard',admin);a=d.activities.find(a=>a.id===id);assert.equal(a.status,'open');assert.equal(a.canVote,true);
 assert.throws(()=>app('vote',admin,{activityId:id,candidateId:admin.id}),/ตัวเอง/);
@@ -24,6 +30,8 @@ const legacy=sheets.get('Activities').rows.find(r=>r[7]==='legacy');assert.ok(le
 // The clock still opens scheduled voting while chat reminders are paused.
 context.LockService={getScriptLock:()=>({waitLock(){},tryLock:()=>true,releaseLock(){}})};
 const tickId=create({startAt:new Date(now+60000).toISOString()}).selectedId;props.set('VOTE_REMINDERS_ENABLED','false');now+=60000;context.runVoteReminderTick();assert.equal(sheets.get('Activities').rows.find(r=>r[0]===tickId)[3],'open');
+app('update',admin,{activityId:tickId,topic:'Rename after opening',endAt:end,awards:['x']});
+assert.throws(()=>app('update',admin,{activityId:tickId,topic:'Cannot rewrite start',startAt:'',endAt:end,awards:['x']}),/กิจกรรมเริ่มแล้ว/);
 const futureId=create({startAt:new Date(now+60000).toISOString()}).selectedId;app('close',admin,{activityId:futureId});now+=60000;context.runVoteReminderTick();assert.equal(sheets.get('Activities').rows.find(r=>r[0]===futureId)[3],'closed','Clock never reopens closed activities');
 // Reminder time must be after the scheduled opening.
 props.set('VOTE_REMINDERS_ENABLED','true');props.set('REMINDER_WEBHOOK_test',env.GOOGLE_CHAT_WEBHOOK_URL);
