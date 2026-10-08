@@ -26,15 +26,12 @@ assert.throws(()=>app('update',admin,{activityId:id,topic:'Changed',startAt:'',e
 app('vote',alice,{activityId:id,candidateId:bob.id});d=app('vote',bob,{activityId:id,candidateId:alice.id});assert.equal(d.activities.find(a=>a.id===id).closeReason,'all_voted');
 const noAdmin=create({startAt:'',allowAdminVote:false}).selectedId;assert.equal(app('dashboard',admin).activities.find(a=>a.id===noAdmin).canVote,false);assert.throws(()=>app('vote',admin,{activityId:noAdmin,candidateId:bob.id}),/ไม่สามารถ/);
 assert.equal(app('dashboard',alice).activities.find(a=>a.id===noAdmin).total,2);
-// Existing activity columns are preserved and default to immediate/admin-disabled.
 const legacy=sheets.get('Activities').rows.find(r=>r[7]==='legacy');assert.ok(legacy);assert.equal(app('dashboard',admin).activities.find(a=>a.id===legacy[0]).allowAdminVote,false);
-// The clock still opens scheduled voting while chat reminders are paused.
 context.LockService={getScriptLock:()=>({waitLock(){},tryLock:()=>true,releaseLock(){}})};
 const tickId=create({startAt:new Date(now+60000).toISOString()}).selectedId;props.set('VOTE_REMINDERS_ENABLED','false');now+=60000;context.runVoteReminderTick();assert.equal(sheets.get('Activities').rows.find(r=>r[0]===tickId)[3],'open');
 app('update',admin,{activityId:tickId,topic:'Rename after opening',endAt:end,awards:['x']});
 assert.throws(()=>app('update',admin,{activityId:tickId,topic:'Cannot rewrite start',startAt:'',endAt:end,awards:['x']}),/กิจกรรมเริ่มแล้ว/);
 const futureId=create({startAt:new Date(now+60000).toISOString()}).selectedId;app('close',admin,{activityId:futureId});now+=60000;context.runVoteReminderTick();assert.equal(sheets.get('Activities').rows.find(r=>r[0]===futureId)[3],'closed','Clock never reopens closed activities');
-// Reminder time must be after the scheduled opening.
 props.set('VOTE_REMINDERS_ENABLED','true');props.set('REMINDER_WEBHOOK_test',env.GOOGLE_CHAT_WEBHOOK_URL);
 const remindId=create({startAt:new Date(now+120000).toISOString()}).selectedId;
 assert.throws(()=>app('reminderAdd',admin,{activityId:remindId,sendAt:new Date(now+60000).toISOString()}),/เวลาเริ่ม/);

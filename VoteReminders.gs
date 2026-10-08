@@ -45,7 +45,7 @@ function runClosureNotificationTick_(activities,ballots,mode,now){
   const text='TrueID Voting — '+title+'\n'+String(a.topic).slice(0,200).replace(/[<>]/g,'')+'\n'+reason+'\n'+timeLabel+Utilities.formatDate(new Date(a.closedAt||a.endAt),'Asia/Bangkok','dd MMMM yyyy HH:mm')+' (เวลาไทย)\nโหวตแล้ว '+stats.completed+'/'+stats.total+' คน\nดูผลโหวต: '+REMINDER_SITE+'?activity='+encodeURIComponent(a.id)+'#vote';
   r.status='sending';r.lastAttemptAt=new Date(now).toISOString();r.error='';saveClosureRows_(rows);SpreadsheetApp.flush();
   let response;try{response=UrlFetchApp.fetch(webhook,{method:'post',contentType:'application/json',payload:JSON.stringify({text}),muteHttpExceptions:true});}catch(_){r.status='unknown';r.error='ไม่ยืนยันการส่ง ไม่ส่งซ้ำอัตโนมัติ';saveClosureRows_(rows);return;}
-  const code=response.getResponseCode();let receipt;try{receipt=JSON.parse(response.getContentText());}catch(_){}
+  const code=response.getResponseCode();let receipt;try{receipt=JSON.parse(response.getContentText());}catch(_){receipt=null;}
   if(code<200||code>=300||!String(receipt?.name||'').startsWith('spaces/'+mode.chatSpaceId+'/messages/')){r.status=code>=400&&code<500?'failed':'unknown';r.error='Chat ส่งไม่สำเร็จหรือไม่มีใบยืนยัน ไม่ส่งซ้ำอัตโนมัติ';}
   else{r.status='sent';r.sentAt=new Date().toISOString();r.messageName=receipt.name;}
   saveClosureRows_(rows);
@@ -195,7 +195,7 @@ function runVoteReminderTick(){
     let webhook;try{webhook=reminderWebhook_(mode,props.getProperty('REMINDER_WEBHOOK_'+mode.environment));}catch(_){row.status='blocked';row.error='Webhook ไม่ตรงกับห้อง';saveReminderRows_(rows);return {ok:false,status:row.status};}
     row.status='sending';row.lastAttemptAt=new Date().toISOString();saveReminderRows_(rows);SpreadsheetApp.flush();
     let response;try{response=UrlFetchApp.fetch(webhook,{method:'post',contentType:'application/json',payload:JSON.stringify({text}),muteHttpExceptions:true});}catch(_){row.status='unknown';row.error='ไม่ยืนยันการส่ง ไม่ส่งซ้ำอัตโนมัติ';saveReminderRows_(rows);return {ok:false,status:row.status};}
-    const code=response.getResponseCode();let receipt;try{receipt=JSON.parse(response.getContentText());}catch(_){}
+    const code=response.getResponseCode();let receipt;try{receipt=JSON.parse(response.getContentText());}catch(_){receipt=null;}
     if(code<200||code>=300||!String(receipt?.name||'').startsWith('spaces/'+mode.chatSpaceId+'/messages/')){row.status=code>=400&&code<500?'failed':'unknown';row.error='Chat ส่งไม่สำเร็จหรือไม่มีใบยืนยัน ไม่ส่งซ้ำอัตโนมัติ';saveReminderRows_(rows);return {ok:false,status:row.status};}
     row.mentionedIds=JSON.stringify([...already,...batch.map(p=>p.chatUserId)]);row.messageNames=JSON.stringify([...JSON.parse(row.messageNames||'[]'),receipt.name]);row.sentAt=new Date().toISOString();
     row.status=pending.length>batch.length?'partial':missing?'blocked':'sent';row.error=missing?'ผู้ยังไม่โหวตบางคนไม่มี Chat ID ในห้องนี้':'';saveReminderRows_(rows);return {ok:true,status:row.status,mentioned:batch.length};

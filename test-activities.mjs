@@ -15,7 +15,6 @@ context.setup();
 const admin={id:'admin-jira',email:'kittisak.bua@truedigital.com',name:'Admin'},alice={id:'alice-jira',email:'alice@muze.co.th',name:'Alice'},bob={id:'bob-jira',email:'bob@truedigital.com',name:'Bob'},sub={id:'sub-jira',email:'sub@muze.co.th',name:'Sub'};
 for(const a of [admin,alice,bob,sub])context.registerClient_({accountId:a.id,name:a.name,email:a.email});
 context.syncChatMembers_({spaceId:'AAQA0MkG6JM',environment:'test',members:[admin,alice,bob,sub].map((a,i)=>({...a,chatUserId:'users/'+(i+100)}))});
-// Legacy real data is migrated once, keeping original sheets untouched.
 const legacy=context.saveConfig_({topic:'Original',endAt:'2030-10-06T12:00:00Z',awards:['First','Second']}).config;
 sheets.get('Votes').appendRow(['2026-10-06T11:00:00Z',alice.id,bob.id,alice.email]);
 const original=JSON.stringify(sheets.get('Votes').rows);

@@ -33,11 +33,6 @@ async function session(req, env) {
 }
 function redirect(url, values=[]) { const headers = new Headers({'Location':url, 'Cache-Control':'no-store'}); values.forEach(v => headers.append('Set-Cookie',v)); return new Response(null,{status:302,headers}); }
 function authError(message) { return new Response(`<!doctype html><html lang="th"><meta charset="utf-8"><title>TrueID Voting</title><main style="font:18px system-ui;max-width:600px;margin:80px auto;padding:24px"><h1>เข้าสู่ระบบไม่สำเร็จ</h1><p>${message}</p><a href="/auth/login">ลองเข้าสู่ระบบอีกครั้ง</a></main></html>`,{status:400,headers:{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store'}}); }
-async function sheetRead(action) {
-  const response = await fetch(SHEET+'?action='+action);
-  if (!response.ok) throw Error('Google Sheet ไม่ตอบกลับ ('+response.status+')');
-  return response.json();
-}
 async function sheetWrite(body,env) {
   const payload=JSON.stringify(body);
   const response=await fetch(SHEET,{method:'POST',headers:{'Content-Type':'application/json; charset=utf-8'},body:JSON.stringify({payload,signature:await hmac(payload,env.JIRA_CLIENT_SECRET)})});
@@ -203,7 +198,7 @@ export default {
         try{response=await fetch(target,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text}),signal:AbortSignal.timeout(15000)});}
         catch{await finish({status:'unknown'});return json({error:'ยังยืนยันการส่งไม่ได้ กรุณาตรวจในห้องแชทก่อน ไม่ส่งซ้ำอัตโนมัติ'},502);}
         if(!response.ok){await finish({status:response.status>=500?'unknown':'failed'});return json({error:'Chat ตอบกลับ HTTP '+response.status+' ไม่ส่งซ้ำอัตโนมัติ'},502);}
-        let receipt;try{receipt=await response.json();}catch{}
+        let receipt;try{receipt=await response.json();}catch{receipt=null;}
         if(!String(receipt?.name||'').startsWith('spaces/'+expected+'/messages/')){await finish({status:'unknown'});return json({error:'ไม่มีใบยืนยันจาก Chat กรุณาตรวจในห้องก่อน ไม่ส่งซ้ำอัตโนมัติ'},502);}
         try{await finish({status:'sent',messageName:receipt.name});}
         catch{return json({error:'Chat รับข้อความแล้ว แต่บันทึกสถานะไม่สำเร็จ กรุณาตรวจในห้องก่อน ไม่ส่งซ้ำ'},502);}
