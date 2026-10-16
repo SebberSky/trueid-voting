@@ -1,5 +1,72 @@
 const $=s=>document.querySelector(s);
 let data=null,user=null,selected=null,editing=null,filter='all',pending=0,toastTimer,closeTimer;
+let selectedCandidateId=null,candidateMatches=[],activeCandidate=-1;
+let photoRequest=null;
+async function loadCandidatePhotos(){
+  if(!user||photoRequest)return;
+  photoRequest=fetch('/api/candidate-photos').then(r=>r.ok?r.json():{photos:[]}).then(result=>{
+    const photos=new Map((result.photos||[]).map(p=>[p.id,p.avatarUrl]));
+    for(const a of data?.activities||[])for(const c of a.candidates)if(photos.has(c.id))c.avatarUrl=photos.get(c.id);
+    if(!$('#candidateList').hidden)candidateMatches.forEach((c,i)=>{
+      const row=$('#candidateList').children[i];if(row)row.firstElementChild.replaceWith(candidateAvatar(c));
+    });
+    const chosen=selected?.candidates.find(c=>c.id===selectedCandidateId);
+    if(chosen)$('#selectedAvatar').replaceChildren(candidateAvatar(chosen));
+  }).catch(()=>null).finally(()=>{photoRequest=null;});
+}
+function candidateAvatar(candidate){
+  const avatar=el('span',undefined,'candidate-avatar');avatar.setAttribute('aria-hidden','true');
+  const placeholder=()=>{avatar.innerHTML='<svg viewBox="0 0 40 40" width="36" height="36" aria-hidden="true"><circle cx="20" cy="12" r="7" fill="#a9a2ca"/><path d="M6 38v-5c0-8 6-13 14-13s14 5 14 13v5" fill="#a9a2ca"/><text x="20" y="33" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="18" font-weight="700">?</text></svg>';};
+  placeholder();
+  if(/^https:\/\/(?:[a-z0-9-]+\.)*(?:googleusercontent\.com|atlassian\.com|atl-paas\.net)\/[^\s]*$/i.test(candidate.avatarUrl||'')){
+    const img=el('img');img.alt='';img.referrerPolicy='no-referrer';img.loading='lazy';img.onerror=placeholder;img.src=candidate.avatarUrl;avatar.replaceChildren(img);
+  }
+  return avatar;
+}
+function closeCandidateList(){
+  $('#candidateList').hidden=true;$('#candidateSearch').setAttribute('aria-expanded','false');$('#candidateSearch').removeAttribute('aria-activedescendant');activeCandidate=-1;
+}
+function chooseCandidate(candidate){
+  selectedCandidateId=candidate.id;$('#candidateSearch').value=candidate.name;
+  $('#selectedAvatar').replaceChildren(candidateAvatar(candidate));$('#selectedAvatar').hidden=false;
+  $('#submitVote').disabled=!selected?.canVote;closeCandidateList();
+}
+function candidateDisplayName(candidate){return candidate.name+(candidate.disambiguator?' · '+candidate.disambiguator:'');}
+function candidateOptionsFor(candidates,query=''){
+  const search=query.trim().toLocaleLowerCase();
+  return candidates.filter(c=>!c.isSelf&&c.name.toLocaleLowerCase().includes(search))
+    .sort((a,b)=>a.name.localeCompare(b.name,['th','en'],{sensitivity:'base',numeric:true}));
+}
+function renderCandidateOptions(){
+  const query=$('#candidateSearch').value.trim().toLocaleLowerCase();
+  candidateMatches=candidateOptionsFor(selected?.candidates||[],query);activeCandidate=-1;
+  $('#candidateList').replaceChildren(...candidateMatches.map((c,i)=>{
+    const row=el('button',undefined,'candidate-option');row.type='button';row.id='candidate-option-'+i;row.setAttribute('role','option');row.setAttribute('aria-selected','false');row.tabIndex=-1;
+    row.append(candidateAvatar(c),el('span',candidateDisplayName(c)));row.onmousedown=e=>e.preventDefault();row.onclick=()=>chooseCandidate(c);return row;
+  }));
+  if(!candidateMatches.length)$('#candidateList').append(el('div','ไม่พบผู้เข้าชิง','candidate-empty'));
+  $('#candidateList').hidden=false;$('#candidateSearch').setAttribute('aria-expanded','true');$('#candidateSearch').removeAttribute('aria-activedescendant');
+}
+$('#candidateSearch').onfocus=renderCandidateOptions;
+$('#candidateSearch').onclick=renderCandidateOptions;
+$('#candidateSearch').oninput=()=>{selectedCandidateId=null;$('#selectedAvatar').hidden=true;$('#submitVote').disabled=true;renderCandidateOptions();};
+$('#candidateSearch').onkeydown=e=>{
+  if(e.key==='Escape')closeCandidateList();
+  else if(e.key==='Enter'){
+    if(!$('#candidateList').hidden&&activeCandidate>=0){e.preventDefault();chooseCandidate(candidateMatches[activeCandidate]);}
+  }else if(['ArrowDown','ArrowUp'].includes(e.key)){
+    e.preventDefault();if($('#candidateList').hidden)renderCandidateOptions();
+    if(candidateMatches.length){
+      const direction=e.key==='ArrowDown'?1:-1;
+      if(activeCandidate<0)activeCandidate=direction===1?0:candidateMatches.length-1;
+      else activeCandidate=(activeCandidate+direction+candidateMatches.length)%candidateMatches.length;
+      Array.from($('#candidateList').children).forEach((row,i)=>row.setAttribute('aria-selected',String(i===activeCandidate)));
+      const active=$('#candidateList').children[activeCandidate];$('#candidateSearch').setAttribute('aria-activedescendant',active.id);active.scrollIntoView({block:'nearest'});
+    }
+  }
+};
+$('#candidatePicker').onfocusout=e=>{if(!$('#candidatePicker').contains(e.relatedTarget))closeCandidateList();};
+document.addEventListener('click',e=>{if(!$('#candidatePicker').contains(e.target))closeCandidateList();});
 function formatVotingDate(value) {
   const date=new Date(value);if(!value||!Number.isFinite(date.getTime()))return 'ยังไม่ได้กำหนด';
   const p=Object.fromEntries(new Intl.DateTimeFormat('th-TH-u-ca-gregory',{timeZone:'Asia/Bangkok',day:'2-digit',month:'long',year:'numeric',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(date).map(p=>[p.type,p.value]));
@@ -94,6 +161,7 @@ async function loadData(){
   const id=new URL(location.href).searchParams.get('activity')||'';
   const result=await api('/api/data?activity='+encodeURIComponent(id));adopt(result);
   if(id){selected=data.activities.find(a=>a.id===id);if(selected)renderDetail();}
+  loadCandidatePhotos();
 }
 function renderCards(){
   const list=$('#activityCards');list.replaceChildren();
@@ -123,8 +191,8 @@ function renderDetail(){
   const reasons={login:'เข้าสู่ระบบเพื่อดูสิทธิ์และโหวต',admin:'กิจกรรมนี้ไม่อนุญาตให้ Admin และ Subadmin โหวต',scheduled:'เริ่มโหวต '+formatVotingDate(a.startAt),closed:a.closeReason==='all_voted'?'ผู้มีสิทธิ์โหวตครบทุกคนแล้ว':'กิจกรรมนี้ปิดโหวตแล้ว',ineligible:'บัญชีนี้ไม่อยู่ในรายชื่อผู้มีสิทธิ์ตอนสร้างกิจกรรม'};
   $('#voteHeading').textContent=a.myVote?'โหวตของคุณถูกบันทึกแล้ว':closed?(a.closeReason==='all_voted'?'โหวตครบแล้ว':'การโหวตสิ้นสุดแล้ว'):a.status==='scheduled'?'ยังไม่ถึงเวลาเริ่มโหวต':'เลือกคนที่คุณต้องการโหวต';
   $('#voteMessage').textContent=a.myVote?'คุณโหวตให้ '+a.myVote.name+' · '+formatVotingDate(a.myVote.votedAt)+' · เปลี่ยนโหวตไม่ได้':closed?reasons.closed:a.status==='scheduled'?reasons.scheduled:reasons[a.voteBlockedReason]||'พิมพ์ชื่อเพื่อค้นหา · ห้ามโหวตตัวเอง · โหวตได้ครั้งเดียว';
-  $('#candidateList').replaceChildren(...a.candidates.filter(c=>!c.isSelf).map(c=>{const option=el('option');option.value=c.name+' · '+c.id.slice(-6);return option;}));
-  $('#candidateSearch').value='';$('#submitVote').disabled=!a.canVote;
+  selectedCandidateId=null;$('#candidateList').replaceChildren();closeCandidateList();$('#selectedAvatar').hidden=true;
+  $('#candidateSearch').value='';$('#submitVote').disabled=true;
   $('#rankingRows').replaceChildren(...a.results.map(r=>{const row=el('div',undefined,'rank-row');row.append(el('span',rankLabel(r),r.votes>0?'rank':'rank unranked'),el('span',r.name+(r.isSelf?' (คุณ)':''),'name'),el('span',String(r.votes),'score'),el('span',r.award?(r.tied?'อันดับร่วม · ':'')+r.award:r.votes?'ไม่มีรางวัลในอันดับนี้':'ยังไม่มีคะแนน','award'));return row;}));
   $('#awardList').replaceChildren(...a.awards.map(x=>el('li',x)));
   clearTimeout(closeTimer);
@@ -183,9 +251,9 @@ $('#activityForm').onsubmit=e=>{
 };
 $('#submitVote').onclick=()=>busy($('#submitVote'),async()=>{
   const a=selected;
-  const candidate=a.candidates.filter(c=>!c.isSelf).find(c=>$('#candidateSearch').value.trim()===c.name+' · '+c.id.slice(-6));
+  const candidate=a.candidates.filter(c=>!c.isSelf).find(c=>c.id===selectedCandidateId&&$('#candidateSearch').value.trim()===c.name);
   if(!candidate)throw Error('เลือกผู้เข้าชิงจากรายการ');
-  if(!await confirmAction('ยืนยันโหวต',`โหวตให้ ${candidate.name} ในกิจกรรม “${a.topic}” ยืนยันแล้วเปลี่ยนไม่ได้`))return;
+  if(!await confirmAction('ยืนยันโหวต',`โหวตให้ ${candidateDisplayName(candidate)} ในกิจกรรม “${a.topic}” ยืนยันแล้วเปลี่ยนไม่ได้`))return;
   const r=await api('/api/app',{op:'vote',activityId:a.id,candidateId:candidate.id});
   adopt({...r,environment:data.environment,spaceName:data.spaceName});selected=data.activities.find(x=>x.id===a.id);renderDetail();message('บันทึกโหวตแล้ว');
 });

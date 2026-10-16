@@ -69,7 +69,7 @@ async function fetchChatMembers(env, replacementRefreshToken) {
       if(!CHAT_DOMAINS.has(email.split('@')[1])||!/^users\/\d+$/.test(member.name||'')){skipped++;continue;}
       if(seenIds.has(member.name))continue;
       if(seenEmails.has(email))throw Error('พบอีเมลซ้ำในรายชื่อสมาชิก จึงยังไม่เปลี่ยนข้อมูลเดิม');
-      seenIds.add(member.name);seenEmails.add(email);members.push({email,name:String(member.displayName||email),chatUserId:member.name});
+      seenIds.add(member.name);seenEmails.add(email);members.push({email,name:String(member.displayName||email),chatUserId:member.name,avatarUrl:member.avatarUrl||''});
     }
     pages++;pageToken=result.nextPageToken||'';
     if(pageToken&&(seenPages.has(pageToken)||pages>=100))throw Error('ดึงสมาชิกไม่ครบทุกหน้า จึงยังไม่เปลี่ยนข้อมูลเดิม');
@@ -78,6 +78,7 @@ async function fetchChatMembers(env, replacementRefreshToken) {
   if(!members.length)throw Error('ไม่พบสมาชิกที่ใช้ได้ จึงเก็บรายชื่อเดิมไว้');
   return {members,pages,skipped};
 }
+let candidatePhotoCache=null;
 export default {
   async fetch(req, env) {
     const url = new URL(req.url);
@@ -147,6 +148,19 @@ export default {
         const actor=await session(req,env);
         if(actor)await sheetWrite({action:'registerClient',accountId:actor.id,name:actor.name,email:actor.email},env);
         return json({user:actor?(await sheetWrite({action:'app',op:'profile',actor},env)).user:null});
+      }
+      if(url.pathname==='/api/candidate-photos'){
+        if(req.method!=='GET')return json({ok:false,error:'Method not allowed'},405);
+        if(!await session(req,env))return json({ok:false,error:'กรุณาเข้าสู่ระบบก่อน'},401);
+        const cacheKey=env.GOOGLE_CHAT_SPACE_ID+':'+votingEnvironment(env).environment;
+        if(candidatePhotoCache?.key===cacheKey&&candidatePhotoCache.expires>Date.now())return json(candidatePhotoCache.result);
+        let result;
+        try{
+          const latest=await fetchChatMembers(env);
+          result=await sheetWrite({action:'updateCandidateAvatars',spaceId:env.GOOGLE_CHAT_SPACE_ID,members:latest.members},env);
+        }catch{result={ok:true,photos:[],unavailable:true};}
+        candidatePhotoCache={key:cacheKey,result,expires:Date.now()+(result.unavailable?60000:300000)};
+        return json(result);
       }
       if (['/api/chat/status','/api/chat/sync','/api/chat/connect'].includes(url.pathname)) {
         const user=await currentUser(req,env);

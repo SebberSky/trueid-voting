@@ -4,7 +4,7 @@
  * Execute as: Me / Who has access: Anyone
  */
 const SHEETS = { config: 'Config', candidates: 'Candidates', votes: 'Votes', results: 'Results', chatMembers: 'ChatMembers' };
-const CANDIDATE_HEADERS = ['candidateId', 'name', 'team', 'active', 'email', 'chatUserId', 'source'];
+const CANDIDATE_HEADERS = ['candidateId', 'name', 'team', 'active', 'email', 'chatUserId', 'source', 'avatarUrl'];
 
 function setup() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -37,6 +37,7 @@ function doPost(e) {
     if (body.action === 'vote') return json_(recordVote_(body));
     if (body.action === 'saveConfig') return json_(saveConfig_(body));
     if (body.action === 'syncChatMembers') return json_(syncChatMembers_(body));
+    if (body.action === 'updateCandidateAvatars') return json_(updateCandidateAvatars_(body));
     if (body.action === 'chatStatus') return json_(chatStatus_());
     if (body.action === 'claimAnnouncement') return json_(claimAnnouncement_(body));
     if (body.action === 'finishAnnouncement') return json_(finishAnnouncement_(body));
@@ -144,7 +145,7 @@ function syncChatMembers_(body) {
     const email=String(m.email||'').trim().toLowerCase(),name=String(m.name||'').trim(),id=String(m.chatUserId||'');
     if(!/^[^@\s]+@(muze\.co\.th|truedigital\.com)$/.test(email)||!/^users\/\d+$/.test(id)||!name||seenIds[id]||seenEmails[email])throw Error('Invalid or duplicate Chat member');
     seenIds[id]=true;seenEmails[email]=true;
-    return {email,name,chatUserId:id};
+    return {email,name,chatUserId:id,avatarUrl:safeAvatarUrl_(m.avatarUrl)};
   });
   const lock=LockService.getScriptLock();lock.waitLock(10000);
   try {
@@ -153,20 +154,20 @@ function syncChatMembers_(body) {
     const syncedAt=new Date().toISOString();
     const chatSheet=ss.getSheetByName(SHEETS.chatMembers),candidateSheet=ss.getSheetByName(SHEETS.candidates);
     const previousMembers=chatSheet.getDataRange().getValues().slice(1).filter(r=>r[2]);
-    const candidates=candidateSheet.getDataRange().getValues().slice(1).filter(r=>r[0]).map(r=>{while(r.length<7)r.push('');return r.slice(0,7);});
+    const candidates=candidateSheet.getDataRange().getValues().slice(1).filter(r=>r[0]).map(r=>{while(r.length<CANDIDATE_HEADERS.length)r.push('');return r.slice(0,CANDIDATE_HEADERS.length);});
     const chatRows=members.map(m=>[m.email,safeSheetText_(m.name),m.chatUserId,'TRUE',syncedAt]);
     previousMembers.filter(r=>!seenIds[String(r[2])]).forEach(r=>chatRows.push([r[0],r[1],r[2],'FALSE',syncedAt]));
     let added=0;
     members.forEach(m=>{
       const index=candidates.findIndex(r=>String(r[5])===m.chatUserId||String(r[0])===m.chatUserId||String(r[4]).toLowerCase()===m.email);
-      if(index<0){candidates.push([m.chatUserId,safeSheetText_(m.name),'','TRUE',m.email,m.chatUserId,'chat']);added++;}
-      else {const row=candidates[index];row[1]=safeSheetText_(m.name);row[3]='TRUE';row[4]=m.email;row[5]=m.chatUserId;row[6]='chat';}
+      if(index<0){candidates.push([m.chatUserId,safeSheetText_(m.name),'','TRUE',m.email,m.chatUserId,'chat',m.avatarUrl]);added++;}
+      else {const row=candidates[index];row[1]=safeSheetText_(m.name);row[3]='TRUE';row[4]=m.email;row[5]=m.chatUserId;row[6]='chat';if(m.avatarUrl)row[7]=m.avatarUrl;}
     });
     let inactive=0;
     candidates.forEach(r=>{if((candidateSource==='chat_members_only'||r[6]==='chat')&&!seenIds[String(r[5])]){r[3]='FALSE';inactive++;}});
     // Never delete candidate IDs or vote history when people leave the Chat space.
     chatSheet.getRange(1,1,chatRows.length+1,5).setValues([['email','name','chatUserId','active','syncedAt'],...chatRows]);
-    candidateSheet.getRange(1,1,candidates.length+1,7).setValues([CANDIDATE_HEADERS,...candidates]);
+    candidateSheet.getRange(1,1,candidates.length+1,CANDIDATE_HEADERS.length).setValues([CANDIDATE_HEADERS,...candidates]);
     const properties=PropertiesService.getScriptProperties();
     properties.setProperty('CHAT_LAST_SYNC_AT',syncedAt);properties.setProperty('CHAT_SPACE_ID',body.spaceId);
     properties.setProperty('VOTING_ENV',environment);properties.setProperty('CANDIDATE_SOURCE',candidateSource);
@@ -182,6 +183,23 @@ function chatStatus_() {
   return {ok:true,...getVotingEnvironment_(),count:members.length,syncedAt:properties.getProperty('CHAT_LAST_SYNC_AT')||null,hasSavedConnection:Boolean(properties.getProperty('GOOGLE_CHAT_REFRESH_TOKEN')),members};
 }
 function safeSheetText_(value) {return /^[=+@-]/.test(value)?"'"+value:value;}
+function safeAvatarUrl_(value){
+  return typeof value==='string'&&/^https:\/\/(?:[a-z0-9-]+\.)*(?:googleusercontent\.com|atlassian\.com|atl-paas\.net)\/[^\s]*$/i.test(value)?value:'';
+}
+function updateCandidateAvatars_(body){
+  if(body.spaceId!==getVotingEnvironment_().chatSpaceId||!Array.isArray(body.members))throw Error('Unexpected avatar source');
+  const lock=LockService.getScriptLock();lock.waitLock(10000);
+  try{
+    const ss=SpreadsheetApp.getActiveSpreadsheet();ensureCandidates_(ss);
+    const sheet=ss.getSheetByName(SHEETS.candidates),rows=sheet.getDataRange().getValues(),photos=[];
+    rows.slice(1).forEach((r,i)=>{
+      const member=body.members.find(m=>m.chatUserId===String(r[5])||m.chatUserId===String(r[0])||(r[4]&&m.email===String(r[4]).toLowerCase()));
+      const avatarUrl=safeAvatarUrl_(member?.avatarUrl);
+      if(avatarUrl){sheet.getRange(i+2,8).setValue(avatarUrl);photos.push({id:String(r[0]),avatarUrl});}
+    });
+    return {ok:true,photos};
+  }finally{lock.releaseLock();}
+}
 
 function claimAnnouncement_(body) {
   const lock=LockService.getScriptLock();lock.waitLock(10000);
