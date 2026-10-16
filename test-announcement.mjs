@@ -6,7 +6,15 @@ import worker from './server.mjs';
 
 const client=await readFile(new URL('./client.js',import.meta.url),'utf8');
 const elements=new Map();
-const document={addEventListener(){},querySelector:s=>{if(!elements.has(s))elements.set(s,{value:'',classList:{add(){},remove(){}},replaceChildren(...children){this.children=children;},select(){},focus(){}});return elements.get(s);},createElement:()=>({})};
+const document={
+  addEventListener(){},querySelectorAll:()=>[],
+  querySelector:s=>{
+    if(!elements.has(s))elements.set(s,{
+      value:'',classList:{add(){},remove(){}},
+      replaceChildren(...children){this.children=children;},select(){},focus(){}
+    });return elements.get(s);
+  },createElement:()=>({})
+};
 const scope=vm.createContext({document,Intl,Date,Map,Array,Number,Promise});
 vm.runInContext(client.slice(0,client.indexOf('function message(')),scope);
 let resolvePhotos;
