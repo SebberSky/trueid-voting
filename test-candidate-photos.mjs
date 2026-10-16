@@ -12,6 +12,11 @@ assert.equal(app('dashboard',alice).activities[0].candidates.find(c=>c.id===bob.
 assert.equal(context.safeAvatarUrl_('javascript:alert(1)'),'');
 assert.equal(context.safeAvatarUrl_('https://evil.example/photo'),'');
 assert.equal(context.safeAvatarUrl_('https://googleusercontent.com.evil.example/photo'),'');
+const duplicateActivity={id:'duplicate',topic:'Same name',status:'open',endAt:'2030-12-06T12:00:00Z',awards:[],candidates:[{id:'one',name:'Alex',email:'alex.one@muze.co.th'},{id:'two',name:'alex',email:'alex.two@muze.co.th'}]};
+const privateChoices=context.appPublic_(duplicateActivity,[],alice).candidates;
+assert.equal(privateChoices[0].disambiguator,'alex.one@muze.co.th');
+assert.equal(privateChoices[1].disambiguator,'alex.two@muze.co.th');
+assert.ok(context.appPublic_(duplicateActivity,[],null).candidates.every(c=>c.disambiguator===''));
 context.updateCandidateAvatars_({spaceId:env.GOOGLE_CHAT_SPACE_ID,members:people.map(p=>({...p,avatarUrl:''}))});
 assert.equal(sheets.get('Candidates').rows.find(r=>r[0]===bob.id)[7],people[2].avatarUrl);
 const savedFetch=globalThis.fetch;let chatCalls=0;

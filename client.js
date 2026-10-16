@@ -12,7 +12,7 @@ async function loadCandidatePhotos(){
     });
     const chosen=selected?.candidates.find(c=>c.id===selectedCandidateId);
     if(chosen)$('#selectedAvatar').replaceChildren(candidateAvatar(chosen));
-  }).catch(()=>null);
+  }).catch(()=>null).finally(()=>{photoRequest=null;});
 }
 function candidateAvatar(candidate){
   const avatar=el('span',undefined,'candidate-avatar');avatar.setAttribute('aria-hidden','true');
@@ -31,12 +31,18 @@ function chooseCandidate(candidate){
   $('#selectedAvatar').replaceChildren(candidateAvatar(candidate));$('#selectedAvatar').hidden=false;
   $('#submitVote').disabled=!selected?.canVote;closeCandidateList();
 }
+function candidateDisplayName(candidate){return candidate.name+(candidate.disambiguator?' · '+candidate.disambiguator:'');}
+function candidateOptionsFor(candidates,query=''){
+  const search=query.trim().toLocaleLowerCase();
+  return candidates.filter(c=>!c.isSelf&&c.name.toLocaleLowerCase().includes(search))
+    .sort((a,b)=>a.name.localeCompare(b.name,['th','en'],{sensitivity:'base',numeric:true}));
+}
 function renderCandidateOptions(){
   const query=$('#candidateSearch').value.trim().toLocaleLowerCase();
-  candidateMatches=(selected?.candidates||[]).filter(c=>!c.isSelf&&c.name.toLocaleLowerCase().includes(query));activeCandidate=-1;
+  candidateMatches=candidateOptionsFor(selected?.candidates||[],query);activeCandidate=-1;
   $('#candidateList').replaceChildren(...candidateMatches.map((c,i)=>{
     const row=el('button',undefined,'candidate-option');row.type='button';row.id='candidate-option-'+i;row.setAttribute('role','option');row.setAttribute('aria-selected','false');row.tabIndex=-1;
-    row.append(candidateAvatar(c),el('span',c.name));row.onmousedown=e=>e.preventDefault();row.onclick=()=>chooseCandidate(c);return row;
+    row.append(candidateAvatar(c),el('span',candidateDisplayName(c)));row.onmousedown=e=>e.preventDefault();row.onclick=()=>chooseCandidate(c);return row;
   }));
   if(!candidateMatches.length)$('#candidateList').append(el('div','ไม่พบผู้เข้าชิง','candidate-empty'));
   $('#candidateList').hidden=false;$('#candidateSearch').setAttribute('aria-expanded','true');$('#candidateSearch').removeAttribute('aria-activedescendant');
@@ -45,13 +51,19 @@ $('#candidateSearch').onfocus=renderCandidateOptions;
 $('#candidateSearch').onclick=renderCandidateOptions;
 $('#candidateSearch').oninput=()=>{selectedCandidateId=null;$('#selectedAvatar').hidden=true;$('#submitVote').disabled=true;renderCandidateOptions();};
 $('#candidateSearch').onkeydown=e=>{
-  if(e.key==='Escape'){closeCandidateList();return;}
-  if(e.key==='Enter'){if(!$('#candidateList').hidden&&activeCandidate>=0){e.preventDefault();chooseCandidate(candidateMatches[activeCandidate]);}return;}
-  if(!['ArrowDown','ArrowUp'].includes(e.key))return;
-  e.preventDefault();if($('#candidateList').hidden)renderCandidateOptions();if(!candidateMatches.length)return;
-  activeCandidate=(activeCandidate+(e.key==='ArrowDown'?1:-1)+candidateMatches.length)%candidateMatches.length;
-  Array.from($('#candidateList').children).forEach((row,i)=>row.setAttribute('aria-selected',String(i===activeCandidate)));
-  const active=$('#candidateList').children[activeCandidate];$('#candidateSearch').setAttribute('aria-activedescendant',active.id);active.scrollIntoView({block:'nearest'});
+  if(e.key==='Escape')closeCandidateList();
+  else if(e.key==='Enter'){
+    if(!$('#candidateList').hidden&&activeCandidate>=0){e.preventDefault();chooseCandidate(candidateMatches[activeCandidate]);}
+  }else if(['ArrowDown','ArrowUp'].includes(e.key)){
+    e.preventDefault();if($('#candidateList').hidden)renderCandidateOptions();
+    if(candidateMatches.length){
+      const direction=e.key==='ArrowDown'?1:-1;
+      if(activeCandidate<0)activeCandidate=direction===1?0:candidateMatches.length-1;
+      else activeCandidate=(activeCandidate+direction+candidateMatches.length)%candidateMatches.length;
+      Array.from($('#candidateList').children).forEach((row,i)=>row.setAttribute('aria-selected',String(i===activeCandidate)));
+      const active=$('#candidateList').children[activeCandidate];$('#candidateSearch').setAttribute('aria-activedescendant',active.id);active.scrollIntoView({block:'nearest'});
+    }
+  }
 };
 $('#candidatePicker').onfocusout=e=>{if(!$('#candidatePicker').contains(e.relatedTarget))closeCandidateList();};
 document.addEventListener('click',e=>{if(!$('#candidatePicker').contains(e.target))closeCandidateList();});
@@ -241,7 +253,7 @@ $('#submitVote').onclick=()=>busy($('#submitVote'),async()=>{
   const a=selected;
   const candidate=a.candidates.filter(c=>!c.isSelf).find(c=>c.id===selectedCandidateId&&$('#candidateSearch').value.trim()===c.name);
   if(!candidate)throw Error('เลือกผู้เข้าชิงจากรายการ');
-  if(!await confirmAction('ยืนยันโหวต',`โหวตให้ ${candidate.name} ในกิจกรรม “${a.topic}” ยืนยันแล้วเปลี่ยนไม่ได้`))return;
+  if(!await confirmAction('ยืนยันโหวต',`โหวตให้ ${candidateDisplayName(candidate)} ในกิจกรรม “${a.topic}” ยืนยันแล้วเปลี่ยนไม่ได้`))return;
   const r=await api('/api/app',{op:'vote',activityId:a.id,candidateId:candidate.id});
   adopt({...r,environment:data.environment,spaceName:data.spaceName});selected=data.activities.find(x=>x.id===a.id);renderDetail();message('บันทึกโหวตแล้ว');
 });

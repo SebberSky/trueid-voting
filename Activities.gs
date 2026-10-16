@@ -63,6 +63,7 @@ function appReconcile_(a,ballots) {
 }
 function appPublic_(a,ballots,actor) {
   const avatars=new Map(appRows_(SHEETS.candidates).map(r=>[String(r[0]),safeAvatarUrl_(r[7])]));
+  const nameCounts=new Map();a.candidates.forEach(c=>{const key=c.name.trim().toLocaleLowerCase();nameCounts.set(key,(nameCounts.get(key)||0)+1);});
   const stats=appStats_(a,ballots),counts={};
   stats.votes.forEach(r=>counts[String(r[3])]=(counts[String(r[3])]||0)+1);
   const results=a.candidates.map(c=>({id:c.id,name:c.name,votes:counts[c.id]||0,isSelf:appIdentity_(c,actor)})).sort((a,b)=>b.votes-a.votes||a.name.localeCompare(b.name,'th'));
@@ -71,7 +72,7 @@ function appPublic_(a,ballots,actor) {
   const mine=actor?stats.votes.find(r=>String(r[1])===actor.id||(actor.email&&String(r[2]).toLowerCase()===actor.email)):null;
   const myVote=mine?{candidateId:String(mine[3]),name:String(mine[5]),votedAt:new Date(mine[4]).toISOString()}:null;
   const role=actor?appRole_(actor.email):null,eligible=actor&&stats.eligible.some(c=>appIdentity_(c,actor));
-  return {id:a.id,topic:a.topic,startAt:a.startAt||'',allowAdminVote:a.allowAdminVote===true,endAt:a.endAt,status:a.status,awards:a.awards,createdAt:a.createdAt,closedAt:a.closedAt,closeReason:a.closeReason,total:stats.total,completed:stats.completed,ballotCount:stats.votes.length,results,myVote,canVote:Boolean(eligible&&(role==='client'||a.allowAdminVote)&&!myVote&&a.status==='open'),voteBlockedReason:!actor?'login':role!=='client'&&!a.allowAdminVote?'admin':myVote?'voted':a.status==='scheduled'?'scheduled':a.status!=='open'?'closed':!eligible?'ineligible':'',candidates:a.candidates.map(c=>({id:c.id,name:c.name,avatarUrl:avatars.get(c.id)||'',isSelf:appIdentity_(c,actor)}))};
+  return {id:a.id,topic:a.topic,startAt:a.startAt||'',allowAdminVote:a.allowAdminVote===true,endAt:a.endAt,status:a.status,awards:a.awards,createdAt:a.createdAt,closedAt:a.closedAt,closeReason:a.closeReason,total:stats.total,completed:stats.completed,ballotCount:stats.votes.length,results,myVote,canVote:Boolean(eligible&&(role==='client'||a.allowAdminVote)&&!myVote&&a.status==='open'),voteBlockedReason:!actor?'login':role!=='client'&&!a.allowAdminVote?'admin':myVote?'voted':a.status==='scheduled'?'scheduled':a.status!=='open'?'closed':!eligible?'ineligible':'',candidates:a.candidates.map(c=>({id:c.id,name:c.name,disambiguator:actor&&nameCounts.get(c.name.trim().toLocaleLowerCase())>1?c.email||'':'',avatarUrl:avatars.get(c.id)||'',isSelf:appIdentity_(c,actor)}))};
 }
 function app_(body) {
   const lock=LockService.getScriptLock();lock.waitLock(20000);

@@ -20,6 +20,15 @@ resolvePhotos({ok:true,json:async()=>({photos:[{id:'hidden-id',avatarUrl:'https:
 await vm.runInContext('photoRequest',scope);
 assert.equal(vm.runInContext('activeCandidate',scope),0,'Deferred photo response preserves keyboard selection');
 assert.equal(updatedPicture.url,'https://lh3.googleusercontent.com/photo');
+assert.equal(vm.runInContext('photoRequest',scope),null);
+let photoAttempts=0;
+scope.fetch=async()=>{photoAttempts++;throw Error('temporary offline');};
+vm.runInContext('loadCandidatePhotos()',scope);await vm.runInContext('photoRequest',scope);
+assert.equal(vm.runInContext('photoRequest',scope),null);
+scope.fetch=async()=>{photoAttempts++;return {ok:true,json:async()=>({photos:[]})};};
+vm.runInContext('loadCandidatePhotos()',scope);await vm.runInContext('photoRequest',scope);
+assert.equal(photoAttempts,2,'Later refresh retries after temporary failure');
+assert.notEqual(scope.candidateDisplayName({name:'Alex',disambiguator:'alex.one@muze.co.th'}),scope.candidateDisplayName({name:'Alex',disambiguator:'alex.two@muze.co.th'}));
 assert.equal(scope.formatVotingDate('2026-10-06T12:00:00Z'),'06 ตุลาคม 2026 · 19:00 น.');
 assert.equal(scope.formatVotingDate('2026-10-05T17:00:00Z'),'06 ตุลาคม 2026 · 00:00 น.');
 assert.equal(scope.rankLabel({votes:0,rank:3}),'ไม่มีอันดับ');
