@@ -16,6 +16,30 @@ select:not([multiple]):not([size]){appearance:none;-webkit-appearance:none;paddi
 @media(max-width:800px){.layout{grid-template-columns:minmax(0,1fr)}.sidebar nav{max-width:100%}.rankings-title{min-width:0}.page-head{flex-wrap:wrap}.brand{font-size:18px}.identity{min-width:0}}
 @media(prefers-reduced-motion:reduce){.spinner,.loader:after{animation:none}}
 #voteFields{display:flex;align-items:center;gap:20px;padding:12px 0}#voteFields>label{flex-shrink:0;font-weight:600}#voteFields>button{flex-shrink:0}.candidate-picker{position:relative;flex:1;min-width:0;max-width:560px}.candidate-input{position:relative;display:flex;align-items:center;background:#fff;border:1px solid #d0d5df;border-radius:10px;gap:10px;padding:0 14px}.candidate-input:focus-within{outline:2px solid #c4bff4;border-color:var(--purple)}.candidate-input input{border:0;outline:none!important;margin:0;width:100%;max-width:none;background:transparent;padding:13px 0;min-width:0}.picker-chevron{color:var(--muted);font-size:24px;line-height:1;pointer-events:none;margin-left:8px}.candidate-options{position:absolute;top:calc(100% + 8px);left:0;right:0;max-height:320px;overflow-y:auto;border:1px solid var(--line);border-radius:12px;background:#fff;box-shadow:0 12px 30px #20253420;padding:6px;z-index:20}.candidate-option{display:flex;align-items:center;gap:12px;width:100%;text-align:left;border:0;background:transparent;padding:10px;border-radius:8px;min-height:56px;overflow-wrap:anywhere}.candidate-option:hover,.candidate-option[aria-selected="true"]{background:#eeecff}.candidate-avatar{display:inline-flex;flex:0 0 36px;align-items:center;justify-content:center;width:36px;height:36px;border-radius:50%;background:#e9e6fc;color:#5146c8;font-size:13px;font-weight:600;overflow:hidden}.candidate-avatar img{width:100%;height:100%;object-fit:cover}.candidate-empty{padding:16px;color:var(--muted)}#selectedAvatar{display:flex;flex-shrink:0}@media(max-width:600px){#voteFields{align-items:stretch;flex-direction:column;gap:12px}.candidate-picker{max-width:none;flex:auto}#voteFields>button{width:100%}.candidate-options{max-height:260px}}
+.rank-viewport{position:relative}
+.rank-viewport.is-collapsed{padding-bottom:28px}
+.rank-fade{
+  position:absolute;left:0;right:0;bottom:0;height:52px;
+  background:linear-gradient(180deg,#fff0 0%,#ffff 88%);pointer-events:none
+}
+.rank-toggle{
+  display:flex;align-items:center;justify-content:center;gap:10px;width:100%;min-height:52px;
+  border:1px solid #e6e2fb;background:#f7f5ff;color:var(--purple);font-weight:600;
+  border-radius:10px;margin:0 0 14px
+}
+.rank-toggle:hover{background:#eeebff}
+.rank-toggle svg{width:20px;height:20px;flex-shrink:0;transition:transform .18s ease}
+.rank-toggle[aria-expanded="true"] svg{transform:rotate(180deg)}
+.rank-row .rank-person{display:flex;align-items:center;gap:12px;min-width:0}
+.rank-person-name{min-width:0;overflow-wrap:anywhere}
+.rank-person .candidate-avatar{flex:0 0 36px}
+@media(max-width:600px){
+  .rank-row .rank-person{gap:8px}
+  .rank-person .candidate-avatar{width:32px;height:32px;flex-basis:32px}
+  .rank-person .candidate-avatar svg{width:32px;height:32px}
+  .rank-toggle{min-height:48px}
+}
+@media(prefers-reduced-motion:reduce){.rank-toggle svg{transition:none}}
 </style>
 </head>
 <body>
@@ -30,7 +54,21 @@ select:not([multiple]):not([size]){appearance:none;-webkit-appearance:none;paddi
 <section id="detailPage" hidden><div class="page-head"><button id="backActivities" class="quiet">กิจกรรมทั้งหมด</button><button id="refreshActivity">รีเฟรชอันดับ</button></div><div id="closedBanner" class="close-banner" hidden><h2>ปิดโหวตแล้ว</h2><p id="closeReason"></p></div><div class="panel"><div class="detail-top"><div><span id="activityStatus" class="badge"></span><h1 id="activityTitle"></h1></div><div class="deadline"><span class="muted">สิ้นสุดการโหวต</span><strong id="activityDeadline"></strong></div></div><div class="stats"><div class="stat"><strong id="completedCount"></strong><span>คนโหวตแล้ว</span></div><div class="stat"><strong id="eligibleCount"></strong><span>คนมีสิทธิ์โหวต</span></div><div class="stat"><strong id="candidateCount"></strong><span>ผู้เข้าชิง</span></div></div><div class="actions"><button id="copyVoteLinkBtn">คัดลอกลิงก์โหวต</button><button id="announceVoteBtn" class="primary" hidden>ประกาศโหวตเข้าห้องแชท</button><button id="editActivityBtn" hidden>แก้ไขกิจกรรม</button><button id="closeActivityBtn" class="danger" hidden>ปิดโหวต</button></div><p id="announcementTarget" class="muted"></p><div id="announcementError" class="error" role="alert" hidden></div><input id="voteShareLink" class="copy-fallback" aria-label="ลิงก์โหวต" readonly hidden></div>
 <section id="activityReminders" class="panel" hidden><div class="page-head"><h2>แจ้งเตือนซ้ำ</h2><button id="refreshReminders">รีเฟรชสถานะเตือน</button></div><p id="reminderHelp" class="muted"></p><div id="reminderIntervalStatus" role="status"></div><details id="reminderHistory"><summary>ประวัติการแจ้งเตือน</summary><div id="reminderList" aria-live="polite"></div></details></section>
 <div id="votePanel" class="panel vote-panel"><h2 id="voteHeading">เลือกคนที่คุณต้องการโหวต</h2><p id="voteMessage"></p><div id="voteFields"><label for="candidateSearch">ผู้เข้าชิง</label><div id="candidatePicker" class="candidate-picker"><div class="candidate-input"><span id="selectedAvatar" hidden></span><input id="candidateSearch" role="combobox" aria-autocomplete="list" aria-controls="candidateList" aria-expanded="false" placeholder="พิมพ์ชื่อเพื่อค้นหา" autocomplete="off"><span class="picker-chevron" aria-hidden="true">⌄</span></div><div id="candidateList" class="candidate-options" role="listbox" aria-label="ผู้เข้าชิง" hidden></div></div><button id="submitVote" class="primary" disabled>ยืนยันโหวต</button></div><button id="voteLogin" hidden>เข้าสู่ระบบด้วย Jira</button></div>
-<section class="panel" id="rankings"><div class="page-head"><h2 id="rankingsTitle">อันดับปัจจุบัน</h2><span class="muted" id="rankingUpdated"></span></div><div class="rank-head"><span>อันดับ</span><span>ผู้เข้าชิง</span><span>คะแนน</span><span class="award">รางวัลตามอันดับ</span></div><div id="rankingRows"></div><p class="ranking-note">คะแนนเท่ากันแสดงอันดับร่วม · ยังไม่มีคะแนนจะยังไม่ระบุรางวัลผู้ชนะ</p><details><summary>รางวัลที่กำหนดไว้</summary><ol id="awardList"></ol></details></section></section>
+<section class="panel" id="rankings">
+  <div class="page-head"><h2 id="rankingsTitle">อันดับปัจจุบัน</h2><span class="muted" id="rankingUpdated"></span></div>
+  <div class="rank-head"><span>อันดับ</span><span>ผู้เข้าชิง</span><span>คะแนน</span><span class="award">รางวัลตามอันดับ</span></div>
+  <div id="rankingViewport" class="rank-viewport">
+    <div id="rankingRows"></div><div id="rankingFade" class="rank-fade" aria-hidden="true" hidden></div>
+  </div>
+  <button id="toggleRankings" class="rank-toggle" type="button" aria-expanded="false" aria-controls="rankingRows" hidden>
+    <span id="rankToggleLabel">ดูอันดับทั้งหมด</span>
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="m6 9 6 6 6-6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+  </button>
+  <p class="ranking-note">คะแนนเท่ากันแสดงอันดับร่วม · ยังไม่มีคะแนนจะยังไม่ระบุรางวัลผู้ชนะ</p>
+  <details><summary>รางวัลที่กำหนดไว้</summary><ol id="awardList"></ol></details>
+</section></section>
 <section id="historyPage" hidden><div class="page-head"><div><h1>ประวัติโหวตของฉัน</h1><p>รายการนี้เห็นได้เฉพาะบัญชีของคุณ</p></div></div><div id="historyList" class="panel"></div></section>
 <section id="adminPage" hidden><div class="page-head"><div><h1 id="adminFormTitle">สร้างกิจกรรมโหวต</h1><p>รายชื่อผู้เข้าชิงมาจาก Client และสมาชิก Chat อัตโนมัติ</p></div></div><form id="activityForm" class="panel"><div class="fields">
 <label class="field wide"><span>ชื่อหัวข้อการโหวต</span><input id="adminTopicInput" required maxlength="200" placeholder="ระบุชื่อกิจกรรม"></label>

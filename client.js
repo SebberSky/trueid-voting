@@ -2,6 +2,39 @@ const $=s=>document.querySelector(s);
 let data=null,user=null,selected=null,editing=null,filter='all',pending=0,toastTimer,closeTimer;
 let selectedCandidateId=null,candidateMatches=[],activeCandidate=-1;
 let photoRequest=null;
+const expandedRankings=new Set();
+function rankingPreview(results,expanded){return {rows:expanded?results.slice():results.slice(0,5),hasMore:results.length>5};}
+function renderRankings(){
+  if(!selected)return;
+  const expanded=expandedRankings.has(selected.id),view=rankingPreview(selected.results,expanded);
+  const candidates=new Map(selected.candidates.map(c=>[c.id,c]));
+  $('#rankingRows').replaceChildren(...view.rows.map(r=>{
+    const row=el('div',undefined,'rank-row'),person=el('span',undefined,'name rank-person');person.dataset.candidateId=r.id;
+    person.append(candidateAvatar(candidates.get(r.id)||r),el('span',r.name+(r.isSelf?' (คุณ)':''),'rank-person-name'));
+    row.append(
+      el('span',rankLabel(r),r.votes>0?'rank':'rank unranked'),person,
+      el('span',String(r.votes),'score'),
+      el('span',r.award?(r.tied?'อันดับร่วม · ':'')+r.award:r.votes?'ไม่มีรางวัลในอันดับนี้':'ยังไม่มีคะแนน','award')
+    );return row;
+  }));
+  $('#rankingViewport').classList.toggle('is-collapsed',view.hasMore&&!expanded);
+  $('#rankingFade').hidden=!view.hasMore||expanded;
+  $('#toggleRankings').hidden=!view.hasMore;
+  $('#toggleRankings').setAttribute('aria-expanded',String(expanded));
+  $('#rankToggleLabel').textContent=expanded?'แสดง 5 อันดับแรก':`ดูอันดับทั้งหมด (${selected.results.length} คน)`;
+}
+function refreshRankingPhotos(){
+  const candidates=new Map((selected?.candidates||[]).map(c=>[c.id,c]));
+  document.querySelectorAll('#rankingRows .rank-person').forEach(person=>{
+    const candidate=candidates.get(person.dataset.candidateId);if(candidate)person.firstElementChild.replaceWith(candidateAvatar(candidate));
+  });
+}
+$('#toggleRankings').onclick=()=>{
+  if(!selected)return;
+  const collapse=expandedRankings.has(selected.id);
+  if(collapse)expandedRankings.delete(selected.id);else expandedRankings.add(selected.id);
+  renderRankings();if(collapse)$('#rankings').scrollIntoView({block:'start'});
+};
 async function loadCandidatePhotos(){
   if(!user||photoRequest)return;
   photoRequest=fetch('/api/candidate-photos').then(r=>r.ok?r.json():{photos:[]}).then(result=>{
@@ -12,6 +45,7 @@ async function loadCandidatePhotos(){
     });
     const chosen=selected?.candidates.find(c=>c.id===selectedCandidateId);
     if(chosen)$('#selectedAvatar').replaceChildren(candidateAvatar(chosen));
+    refreshRankingPhotos();
   }).catch(()=>null).finally(()=>{photoRequest=null;});
 }
 function candidateAvatar(candidate){
@@ -193,7 +227,7 @@ function renderDetail(){
   $('#voteMessage').textContent=a.myVote?'คุณโหวตให้ '+a.myVote.name+' · '+formatVotingDate(a.myVote.votedAt)+' · เปลี่ยนโหวตไม่ได้':closed?reasons.closed:a.status==='scheduled'?reasons.scheduled:reasons[a.voteBlockedReason]||'พิมพ์ชื่อเพื่อค้นหา · ห้ามโหวตตัวเอง · โหวตได้ครั้งเดียว';
   selectedCandidateId=null;$('#candidateList').replaceChildren();closeCandidateList();$('#selectedAvatar').hidden=true;
   $('#candidateSearch').value='';$('#submitVote').disabled=true;
-  $('#rankingRows').replaceChildren(...a.results.map(r=>{const row=el('div',undefined,'rank-row');row.append(el('span',rankLabel(r),r.votes>0?'rank':'rank unranked'),el('span',r.name+(r.isSelf?' (คุณ)':''),'name'),el('span',String(r.votes),'score'),el('span',r.award?(r.tied?'อันดับร่วม · ':'')+r.award:r.votes?'ไม่มีรางวัลในอันดับนี้':'ยังไม่มีคะแนน','award'));return row;}));
+  renderRankings();
   $('#awardList').replaceChildren(...a.awards.map(x=>el('li',x)));
   clearTimeout(closeTimer);
   if(!closed){const next=a.status==='scheduled'?a.startAt:a.endAt,delay=Math.max(1000,Math.min(Date.parse(next)-Date.now()+500,2147483000));closeTimer=setTimeout(()=>loadData().catch(e=>error(e.message)),delay);}
