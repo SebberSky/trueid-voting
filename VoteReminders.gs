@@ -165,6 +165,10 @@ function reminderPeople_(activity,ballots){
     return {id:c.id,chatUserId:member?String(member[2]):''};
   });
 }
+function reminderWeekday_(now){
+  const day=new Date(now+7*60*60*1000).getUTCDay();
+  return day!==0&&day!==6;
+}
 function runVoteReminderTick(){
   const lock=LockService.getScriptLock();if(!lock.tryLock(1000))return {ok:true,busy:true};
   try{
@@ -182,6 +186,7 @@ function runVoteReminderTick(){
       const a=activities.find(a=>a.id===r.activityId);
       if(!a||a.status==='closed'||r.environment!==mode.environment||r.spaceId!==mode.chatSpaceId||Date.parse(r.sendAt)>=Date.parse(a.endAt)||(a.startAt&&Date.parse(r.sendAt)<Date.parse(a.startAt))||now-Date.parse(r.sendAt)>REMINDER_GRACE_MS){r.status='skipped';r.error='กิจกรรมปิดแล้ว ห้องเปลี่ยน หรือเวลาเตือนไม่ตรงช่วงโหวต';}
     }
+    if(!reminderWeekday_(now)){saveReminderRows_(rows);return {ok:true,weekend:true};}
     queueReminderIntervals_(activities,rows,mode,now);
     saveReminderRows_(rows);
     const row=rows.filter(r=>['pending','partial'].includes(r.status)&&Date.parse(r.sendAt)<=now).sort((a,b)=>Date.parse(a.sendAt)-Date.parse(b.sendAt))[0];
@@ -193,7 +198,9 @@ function runVoteReminderTick(){
     const batch=pending.slice(0,40),topic=String(a.topic).slice(0,200).replace(/[<>]/g,'');
     const text='TrueID Voting — แจ้งเตือนโหวต\n'+topic+'\n'+batch.map(p=>'<'+p.chatUserId+'>').join(' ')+'\nยังไม่โหวต ณ เวลาส่ง · สิ้นสุด '+Utilities.formatDate(new Date(a.endAt),'Asia/Bangkok','dd MMMM yyyy HH:mm')+' (เวลาไทย)\n'+REMINDER_SITE+'?activity='+encodeURIComponent(a.id)+'#vote';
     let webhook;try{webhook=reminderWebhook_(mode,props.getProperty('REMINDER_WEBHOOK_'+mode.environment));}catch(_){row.status='blocked';row.error='Webhook ไม่ตรงกับห้อง';saveReminderRows_(rows);return {ok:false,status:row.status};}
+    const previousStatus=row.status;
     row.status='sending';row.lastAttemptAt=new Date().toISOString();saveReminderRows_(rows);SpreadsheetApp.flush();
+    if(!reminderWeekday_(Date.now())){row.status=previousStatus;row.lastAttemptAt='';saveReminderRows_(rows);return {ok:true,weekend:true};}
     let response;try{response=UrlFetchApp.fetch(webhook,{method:'post',contentType:'application/json',payload:JSON.stringify({text}),muteHttpExceptions:true});}catch(_){row.status='unknown';row.error='ไม่ยืนยันการส่ง ไม่ส่งซ้ำอัตโนมัติ';saveReminderRows_(rows);return {ok:false,status:row.status};}
     const code=response.getResponseCode();let receipt;try{receipt=JSON.parse(response.getContentText());}catch(_){receipt=null;}
     if(code<200||code>=300||!String(receipt?.name||'').startsWith('spaces/'+mode.chatSpaceId+'/messages/')){row.status=code>=400&&code<500?'failed':'unknown';row.error='Chat ส่งไม่สำเร็จหรือไม่มีใบยืนยัน ไม่ส่งซ้ำอัตโนมัติ';saveReminderRows_(rows);return {ok:false,status:row.status};}
